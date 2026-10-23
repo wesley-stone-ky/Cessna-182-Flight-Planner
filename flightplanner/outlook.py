@@ -39,7 +39,7 @@ def _hour_ok(wx: WxPoint, mins: Minimums) -> bool:
         return False
     if wx.gust_kt >= mins.max_gust_kt or wx.wind_kt >= mins.max_surface_wind_kt:
         return False
-    if wx.thunder or (wx.cape >= mins.cape_nogo_jkg and wx.precip_prob >= 30):
+    if wx.storm_level(mins.cape_caution_jkg, mins.cape_nogo_jkg) == "likely":
         return False
     return True
 
@@ -89,9 +89,8 @@ def airport_outlook(fc: GridForecast, ap: Airport, mins: Minimums, tz: str = "Am
         cigs = [w.ceiling_agl_ft() for w in wxs if w.ceiling_agl_ft() is not None]
         viss = [w.vis_sm for w in wxs if w.vis_sm is not None]
         flyable = sum(ok for _, ok in flags)
-        storm_lvl = ("likely" if any(w.thunder or (w.cape >= mins.cape_nogo_jkg and w.precip_prob >= 30) for w in wxs)
-                     else "some" if any(w.cape >= mins.cape_caution_jkg and w.precip_prob >= 30 for w in wxs)
-                     else "low")
+        lv = {w.storm_level(mins.cape_caution_jkg, mins.cape_nogo_jkg) for w in wxs}
+        storm_lvl = "likely" if "likely" in lv else "some" if "some" in lv else "low"
         verdict = "Good" if flyable >= 6 else "Fair" if flyable >= 3 else "Poor"
         mid = min(wxs, key=lambda w: abs((w.time.astimezone(zone).hour) - 12))
         wd, ws, _, _ = mid.wind_at(6000)
@@ -137,7 +136,7 @@ def hourly_rows(fc: GridForecast, ap: Airport, day: date, tz: str = "America/New
             "Vis": "—" if wx.vis_sm is None else ("10+" if wx.vis_sm >= 10 else f"{wx.vis_sm:.0f}"),
             "Wind": f"{wx.wind_dir:03.0f}@{wx.wind_kt:.0f}" + (f"G{wx.gust_kt:.0f}" if wx.gust_kt >= wx.wind_kt + 5 else ""),
             "Rain %": f"{wx.precip_prob:.0f}",
-            "CAPE": f"{wx.cape:.0f}",
+            "Thunder %": "—" if wx.thunder_prob is None else f"{wx.thunder_prob:.0f}",
             "Temp °F": "—" if wx.temp_c is None else f"{wx.temp_c * 9 / 5 + 32:.0f}",
             "3000 AGL": f"{d3:03.0f}@{s3:.0f}",
             "6000": f"{d6:03.0f}@{s6:.0f}",
@@ -171,9 +170,10 @@ def route_outlook(fc: GridForecast, legs, mins: Minimums, tz: str = "America/New
                         if worst_margin is None or margin < worst_margin:
                             worst_margin, worst_where = margin, f"{la:.1f},{lo:.1f}"
                     rain = max(rain, wx.precip_prob)
-                    if wx.thunder or (wx.cape >= mins.cape_nogo_jkg and wx.precip_prob >= 30):
+                    lvl = wx.storm_level(mins.cape_caution_jkg, mins.cape_nogo_jkg)
+                    if lvl == "likely":
                         storms = "likely"
-                    elif storms == "low" and wx.cape >= mins.cape_caution_jkg and wx.precip_prob >= 30:
+                    elif storms == "low" and lvl == "some":
                         storms = "some"
         if n == 0:
             rows.append({"day": day, "verdict": "No data", "ceiling_margin": None, "rain": None, "storms": "—"})

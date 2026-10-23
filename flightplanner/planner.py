@@ -537,12 +537,13 @@ def evaluate_leg(ctx: Context, leg: Leg, li: int, dep_time: datetime, fuel_on_bo
             findings.append(Finding(CAUTION, li, where, "Beyond the forecast horizon here", "nodata"))
             continue
         pt_alt = alt if cs - 1 <= d <= ce + 1 else max(leg.dep.elev_ft, leg.arr.elev_ft) + 1500
-        if wx.thunder or (wx.cape >= m.cape_nogo_jkg and wx.precip_prob >= 30):
+        storms = wx.storm_level(m.cape_caution_jkg, m.cape_nogo_jkg)
+        if storms == "likely":
             findings.append(Finding(NOGO, li, where, f"Thunderstorms likely {where} ~{ctx.fmt(eta)} "
-                                    f"(CAPE {wx.cape:.0f}, {wx.precip_prob:.0f}% precip)", "ts"))
-        elif wx.cape >= m.cape_caution_jkg and wx.precip_prob >= 30:
-            findings.append(Finding(CAUTION, li, where, f"Unstable air / possible showers {where} ~{ctx.fmt(eta)} "
-                                    f"(CAPE {wx.cape:.0f})", "ts"))
+                                    f"({wx.storm_detail()})", "ts"))
+        elif storms == "some":
+            findings.append(Finding(CAUTION, li, where, f"Possible thunderstorms {where} ~{ctx.fmt(eta)} "
+                                    f"({wx.storm_detail()})", "ts"))
         if wx.wcode in FREEZING_PRECIP:
             findings.append(Finding(NOGO, li, where, f"Freezing precipitation {where}", "ice"))
         if wx.precip_prob >= m.precip_prob_caution_pct and wx.wcode >= 51:
@@ -737,8 +738,8 @@ def route_weather_rows(ctx: Context, r: PlanResult) -> list[dict]:
                 "Terrain": f"{p.terrain_ft:,.0f}",
                 "Vis (sm)": "—" if wx.vis_sm is None else ("10+" if wx.vis_sm >= 10 else f"{wx.vis_sm:.0f}"),
                 "Rain %": f"{wx.precip_prob:.0f}",
-                "Storm risk": "HIGH" if wx.thunder or wx.cape >= ctx.mins.cape_nogo_jkg else
-                              ("some" if wx.cape >= ctx.mins.cape_caution_jkg else "low"),
+                "Storm risk": {"likely": "HIGH", "some": "some", "low": "low"}[
+                    wx.storm_level(ctx.mins.cape_caution_jkg, ctx.mins.cape_nogo_jkg)],
                 f"Wind @ {lr.alt_ft:,.0f}": f"{wdir:03.0f}@{wspd:.0f} ({'tail' if comp >= 0 else 'head'} {abs(comp):.0f})",
                 "Temp @ alt": "—" if t_alt is None else f"{t_alt:.0f}°C",
             })

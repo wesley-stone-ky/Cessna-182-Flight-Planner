@@ -328,3 +328,79 @@ def test_forecast_request_is_light_and_handles_rate_limit(tmp_path, monkeypatch)
     assert n_pts <= 50, n_pts
     assert p0["forecast_days"] == 10
     assert len(calls) == 3                      # retried politely, then gave up
+
+
+def _nws_props(t0_iso: str):
+    """A realistic api.weather.gov gridpoint 'properties' block (trimmed)."""
+    def layer(uom, vals):
+        return {"uom": uom, "values": [{"validTime": v, "value": x} for v, x in vals]}
+    return {
+        "updateTime": t0_iso,
+        "elevation": {"unitCode": "wmoUnit:m", "value": 300.0},
+        "temperature": layer("wmoUnit:degC", [(f"{t0_iso}/PT6H", 15.0), (f"{t0_iso[:11]}18:00:00+00:00/P1DT6H", 18.0)]),
+        "dewpoint": layer("wmoUnit:degC", [(f"{t0_iso}/P2D", 10.0)]),
+        "skyCover": layer("wmoUnit:percent", [(f"{t0_iso}/PT3H", 90), (f"{t0_iso[:11]}15:00:00+00:00/P2D", 20)]),
+        "ceilingHeight": layer("wmoUnit:m", [(f"{t0_iso}/PT3H", 300), (f"{t0_iso[:11]}15:00:00+00:00/P2D", None)]),
+        "visibility": layer("wmoUnit:m", [(f"{t0_iso}/PT3H", 3218.7), (f"{t0_iso[:11]}15:00:00+00:00/P2D", 16093)]),
+        "windSpeed": layer("wmoUnit:km_h-1", [(f"{t0_iso}/P2D", 18.52)]),
+        "windDirection": layer("wmoUnit:degree_(angle)", [(f"{t0_iso}/P2D", 230)]),
+        "windGust": layer("wmoUnit:km_h-1", [(f"{t0_iso}/P2D", 37.04)]),
+        "transportWindSpeed": layer("wmoUnit:km_h-1", [(f"{t0_iso}/P2D", 46.3)]),
+        "transportWindDirection": layer("wmoUnit:degree_(angle)", [(f"{t0_iso}/P2D", 250)]),
+        "probabilityOfPrecipitation": layer("wmoUnit:percent", [(f"{t0_iso}/P2D", 60)]),
+        "probabilityOfThunder": layer("wmoUnit:percent", [(f"{t0_iso}/P2D", 45)]),
+        "weather": {"values": [{"validTime": f"{t0_iso}/P2D", "value": [
+            {"coverage": "chance", "weather": "thunderstorms", "intensity": None, "attributes": []},
+            {"coverage": "likely", "weather": "rain_showers", "intensity": "light", "attributes": []}]}]},
+    }
+
+
+def test_nws_grid_parsing_and_merge_when_open_meteo_is_rate_limited(tmp_path, monkeypatch):
+    import flightplanner.nws as nws
+    import flightplanner.weather as w
+    monkeypatch.setattr(w, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(nws, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(nws, "_POINTS_FILE", tmp_path / "pts.json")
+    monkeypatch.setattr(w.time, "sleep", lambda s: None)
+    monkeypatch.setattr(nws.time, "sleep", lambda s: None)
+    monkeypatch.setattr(w, "_OM_BLOCKED_UNTIL", 0.0)
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    t0 = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:00:00+00:00")
+    # make the second interval start 3 h after t0
+    props = _nws_props(t0)
+    for lay in ("skyCover", "ceilingHeight", "visibility"):
+        props[lay]["values"][1]["validTime"] = (now + timedelta(hours=2)).strftime("%Y-%m-%dT%H:00:00+00:00") + "/P2D"
+
+    class Resp:
+        def __init__(self, code, data=None):
+            self.status_code, self._d, self.headers, self.content = code, data, {}, b"x"
+        def json(self):
+            return self._d
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.status_code)
+
+    class Sess:
+        def get(self, url, params=None, timeout=None, headers=None):
+            if "open-meteo" in url:
+                return Resp(429)
+            if "/points/27.5" in url:            # a point over the Gulf: NWS has no grid there
+                return Resp(404)
+            if "/points/" in url:
+                return Resp(200, {"properties": {"forecastGridData": "https://api.weather.gov/gridpoints/LMK/80,61"}})
+            return Resp(200, {"properties": props})
+
+    fc, status = w.fetch_forecast([(38.0, -84.5), (27.5, -82.75)], session=Sess())
+    assert status["NWS forecast (weather.gov)"].ok and status["NWS forecast (weather.gov)"].count == 1
+    assert not status["Open-Meteo (winds aloft, days 8-10)"].ok
+    wx = fc.at(38.0, -84.5, now)
+    assert wx.nws and wx.ceiling_agl_ft() == pytest.approx(984, abs=2)       # 300 m ceiling
+    assert wx.vis_sm == pytest.approx(2.0, abs=0.05)
+    assert wx.wind_kt == pytest.approx(10, abs=0.1) and wx.gust_kt == pytest.approx(20, abs=0.1)
+    assert wx.storm_level(500, 1500) == "likely" and wx.wcode == 95
+    later = fc.at(38.0, -84.5, now + timedelta(hours=6))
+    assert later.ceiling_agl_ft() is None and later.vis_sm > 9                # clears up
+    wdir, wspd, _, _ = later.wind_at(6000)
+    assert wspd == pytest.approx(25, abs=1) and 240 <= wdir <= 260           # transport wind used aloft
+    # the Gulf point borrows the nearest grid instead of failing
+    assert fc.at(27.5, -82.75, now) is not None

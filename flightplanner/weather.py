@@ -106,10 +106,33 @@ class WxPoint:
     gust_kt: float
     levels: list[Level] = field(default_factory=list)
     cloud_layers: list[tuple[float, float]] = field(default_factory=list)  # (height ft MSL, cover %)
+    # From the National Weather Service grid (when available)
+    nws: bool = False
+    nws_ceiling_ft: float | None = None
+    sky_cover: float | None = None
+    thunder_prob: float | None = None
 
     @property
     def thunder(self) -> bool:
-        return self.wcode in THUNDER_CODES
+        return self.wcode in THUNDER_CODES or (self.thunder_prob or 0) >= 40
+
+    def storm_level(self, caution_cape: float, nogo_cape: float) -> str:
+        """'likely' / 'some' / 'low' from NWS thunder chance and/or model CAPE."""
+        tp = self.thunder_prob or 0
+        if self.thunder or (self.cape >= nogo_cape and self.precip_prob >= 30):
+            return "likely"
+        if tp >= 15 or (self.cape >= caution_cape and self.precip_prob >= 30):
+            return "some"
+        return "low"
+
+    def storm_detail(self) -> str:
+        bits = []
+        if self.thunder_prob is not None:
+            bits.append(f"{self.thunder_prob:.0f}% thunder chance")
+        if self.cape:
+            bits.append(f"CAPE {self.cape:.0f}")
+        bits.append(f"{self.precip_prob:.0f}% precip")
+        return ", ".join(bits)
 
     @property
     def wx_text(self) -> str:
@@ -118,11 +141,22 @@ class WxPoint:
     def ceiling_agl_ft(self) -> float | None:
         """Estimated ceiling (lowest broken/overcast base) in ft AGL, or None.
 
+        The NWS grid forecasts ceiling height directly; we use it when present.
         Open-Meteo has no ceiling field. We combine low-cloud cover (0-3 km)
         with the surface temperature/dewpoint spread (~400 ft per deg C, the
         classic convective-base rule) and saturated pressure levels.
         This is a SCREENING estimate. TAFs override it near the airports.
         """
+        if self.nws:
+            if self.nws_ceiling_ft is not None and (self.sky_cover is None or self.sky_cover >= 50):
+                return max(100.0, self.nws_ceiling_ft)
+            if self.sky_cover is not None and self.sky_cover < 50:
+                return None
+            if self.sky_cover is not None and self.sky_cover >= 70 and not self.cloud_layers \
+                    and self.low_cloud < 60:
+                # overcast with no NWS ceiling and no model layers: use the dewpoint-spread estimate
+                spread = (self.temp_c - self.dew_c) if (self.temp_c is not None and self.dew_c is not None) else 7.5
+                return max(300.0, min(9800.0, max(0.0, spread) * 400.0))
         agl_layers = sorted((h - self.surface_elev_ft, c) for h, c in self.cloud_layers
                             if h - self.surface_elev_ft > 0)
         layer_base = next((h for h, c in agl_layers if c >= 60 and h <= 10000), None)
@@ -243,11 +277,13 @@ class GridForecast:
                 layers.append((float(z) * M_TO_FT, float(cc)))
         vis = g("visibility")
         fzl = g("freezing_level_height")
+        nws_has = g("nws_has") is not None
+        nws_cig = g("nws_ceiling_m")
         wp = WxPoint(
             time=times[i], lat=k[0], lon=k[1],
             surface_elev_ft=float(s.get("elevation") or 0) * M_TO_FT,
             temp_c=g("temperature_2m"), dew_c=g("dew_point_2m"),
-            low_cloud=float(g("cloud_cover_low", 0)), mid_cloud=float(g("cloud_cover_mid", 0)),
+            low_cloud=float(g("cloud_cover_low", g("sky_cover", 0)) or 0), mid_cloud=float(g("cloud_cover_mid", 0) or 0),
             vis_sm=(float(vis) / 1609.34) if vis is not None else None,
             precip_prob=float(g("precipitation_probability", 0) or 0),
             precip_mm=float(g("precipitation", 0) or 0),
@@ -255,6 +291,8 @@ class GridForecast:
             freezing_level_ft=(float(fzl) * M_TO_FT) if fzl is not None else None,
             wind_dir=float(g("wind_direction_10m", 0) or 0), wind_kt=float(g("wind_speed_10m", 0) or 0),
             gust_kt=float(g("wind_gusts_10m", 0) or 0), levels=levels, cloud_layers=layers,
+            nws=nws_has, nws_ceiling_ft=(float(nws_cig) * M_TO_FT) if nws_cig is not None else None,
+            sky_cover=g("sky_cover"), thunder_prob=g("thunder_prob"),
         )
         self._cache[ck] = wp
         return wp
@@ -278,10 +316,13 @@ def _cache_put(key: str, data) -> None:
         pass
 
 
-def _om_get(sess, url: str, params: dict) -> requests.Response:
+_OM_BLOCKED_UNTIL = 0.0   # after a 429, don't hammer Open-Meteo again for a while
+
+
+def _om_get(sess, url: str, params: dict, retries: int = 3) -> requests.Response:
     """GET with polite retries on HTTP 429 (rate limit) and 5xx."""
     r = None
-    for attempt in range(3):
+    for attempt in range(retries):
         r = sess.get(url, params=params, timeout=60, headers={"User-Agent": USER_AGENT})
         if r.status_code not in (429, 500, 502, 503, 504):
             return r
@@ -300,7 +341,8 @@ class RateLimited(RuntimeError):
 
 def fetch_model_forecast(points: Iterable[tuple[float, float]], days: int = 10,
                          session: requests.Session | None = None, ttl_s: int = 3600,
-                         api_key: str | None = None) -> GridForecast:
+                         api_key: str | None = None, retries: int = 3) -> GridForecast:
+    global _OM_BLOCKED_UNTIL
     keys = sorted({snap(la, lo) for la, lo in points})
     hourly = list(SURFACE_VARS) + [f"{v}_{p}hPa" for p in LEVELS_HPA for v in LEVEL_VARS]
     for p in CLOUD_LEVELS_HPA:
@@ -328,8 +370,11 @@ def fetch_model_forecast(points: Iterable[tuple[float, float]], days: int = 10,
                                              sort_keys=True).encode()).hexdigest()[:16]
         data = _cache_get(ck, ttl_s)
         if data is None:
-            r = _om_get(sess, url, params)
+            if time.time() < _OM_BLOCKED_UNTIL:
+                raise RateLimited("Open-Meteo is rate-limiting this server; skipping it for a few minutes.")
+            r = _om_get(sess, url, params, retries)
             if r.status_code == 429:
+                _OM_BLOCKED_UNTIL = time.time() + 600
                 raise RateLimited("The free weather service (Open-Meteo) is rate-limiting this server right now. "
                                   "Wait a minute and try again.")
             if r.status_code == 400:
@@ -696,3 +741,92 @@ def taf_at(taf: dict | None, when: datetime) -> tuple[TafPeriod | None, list[Taf
         else:
             prevailing = p
     return prevailing, temps
+
+
+# ---------------------------------------------------------------------------
+# Combined forecast: NWS (primary, days 1-7) + Open-Meteo (winds aloft, days 8-10)
+# ---------------------------------------------------------------------------
+NWS_OVERRIDES = ("temperature_2m", "dew_point_2m", "visibility", "precipitation_probability",
+                 "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m")
+NWS_ONLY = ("nws_ceiling_m", "sky_cover", "thunder_prob", "nws_has")
+
+
+def merge_series(om: dict | None, nws: dict | None) -> dict:
+    """One Open-Meteo-shaped series for a grid point from either or both sources."""
+    om_h = (om or {}).get("hourly", {})
+    om_times = [int(t) for t in om_h.get("time", [])]
+    nws_times = (nws or {}).get("times", [])
+    times = sorted(set(om_times) | set(nws_times))
+    oi = {t: i for i, t in enumerate(om_times)}
+    ni = {t: i for i, t in enumerate(nws_times)}
+    hourly: dict[str, list] = {"time": times}
+    for name, arr in om_h.items():
+        if name == "time":
+            continue
+        hourly[name] = [arr[oi[t]] if t in oi and oi[t] < len(arr) else None for t in times]
+    if nws:
+        v = nws["vars"]
+        for name in NWS_OVERRIDES + NWS_ONLY:
+            src = v.get(name) or []
+            base = hourly.get(name, [None] * len(times))
+            hourly[name] = [src[ni[t]] if (t in ni and src[ni[t]] is not None) else base[i]
+                            for i, t in enumerate(times)]
+        wc = v.get("weather_code") or []
+        base = hourly.get("weather_code", [None] * len(times))
+        hourly["weather_code"] = [
+            max(wc[ni[t]] or 0, base[i] or 0) if t in ni and wc[ni[t]] is not None else base[i]
+            for i, t in enumerate(times)]
+        # No model winds aloft? Use the NWS mixed-layer ("transport") wind as a
+        # stand-in for ~5,000 ft so groundspeed isn't computed from surface wind.
+        if not om_h.get("wind_speed_850hPa"):
+            elev = nws.get("elevation_m") or 0
+            tw, td = v.get("transport_wind_kt") or [], v.get("transport_wind_dir") or []
+            hourly["wind_speed_850hPa"] = [tw[ni[t]] if t in ni else None for t in times]
+            hourly["wind_direction_850hPa"] = [td[ni[t]] if t in ni else None for t in times]
+            hourly["geopotential_height_850hPa"] = [elev + 1500 if t in ni and tw[ni[t]] is not None else None
+                                                    for t in times]
+            temps = hourly.get("temperature_2m", [None] * len(times))
+            hourly["temperature_850hPa"] = [(tt - 9.75) if tt is not None else None for tt in temps]
+            hourly["relative_humidity_850hPa"] = [None] * len(times)
+    elev_m = (om or {}).get("elevation")
+    if elev_m is None and nws:
+        elev_m = nws.get("elevation_m")
+    return {"elevation": elev_m or 0, "hourly": hourly}
+
+
+def fetch_forecast(points: Iterable[tuple[float, float]], days: int = 10, api_key: str | None = None,
+                   session: requests.Session | None = None, ttl_s: int = 1800,
+                   use_nws: bool = True, use_open_meteo: bool = True) -> tuple[GridForecast, dict]:
+    """Returns (forecast, status) where status maps source name -> SourceStatus."""
+    from .nws import NWS
+    keys = sorted({snap(la, lo) for la, lo in points})
+    status: dict[str, SourceStatus] = {}
+    nws_series: dict = {}
+    if use_nws:
+        st = SourceStatus("NWS forecast (weather.gov)")
+        try:
+            res = NWS(session=session, ttl_s=ttl_s).fetch(keys)
+            nws_series = res.series
+            st.count, st.fetched_at = res.ok_points, datetime.now(timezone.utc)
+            if not res.ok_points:
+                st.ok, st.error = False, (res.errors[0] if res.errors else "no data returned")
+        except Exception as e:
+            st.ok, st.error = False, str(e)[:200]
+        status[st.name] = st
+    om_series: dict = {}
+    if use_open_meteo:
+        st = SourceStatus("Open-Meteo (winds aloft, days 8-10)")
+        try:
+            gf = fetch_model_forecast(keys, days=days, session=session, ttl_s=ttl_s, api_key=api_key,
+                                      retries=1 if nws_series else 3)
+            om_series = gf.series
+            st.count, st.fetched_at = len(om_series), datetime.now(timezone.utc)
+        except Exception as e:
+            st.ok, st.error = False, str(e)[:200]
+        status[st.name] = st
+    if not nws_series and not om_series:
+        msgs = "; ".join(f"{k}: {v.error}" for k, v in status.items())
+        raise RuntimeError(f"No weather source answered. {msgs}")
+    merged = {k: merge_series(om_series.get(k), nws_series.get(k))
+              for k in set(om_series) | set(nws_series)}
+    return GridForecast(merged), status

@@ -17,7 +17,7 @@ legal weather briefing.
 - `flightplanner/planner.py` is the core: `candidate_plans` → `attach_terrain` →
   `search_days(ctx, plans, start, end, earliest_hour, latest_hour)` → `DayResult`/`PlanResult`
   with `Finding`s (NO-GO / CAUTION).
-- Weather: `weather.GridForecast` (Open-Meteo, snapped to a 0.25° grid) plus
+- Weather: `weather.GridForecast` (NWS api.weather.gov grids as primary, merged with best-effort Open-Meteo for winds aloft and days 8-10; 0.5° grid; see weather.fetch_forecast and nws.py) plus
   `weather.AviationWeather` (TAF/METAR/AIRMET/SIGMET/G-AIRMET from aviationweather.gov).
   Set a User-Agent and keep AWC under 100 requests/min.
 - Aircraft numbers come only from `config/aircraft.yaml`. Never hard-code performance.

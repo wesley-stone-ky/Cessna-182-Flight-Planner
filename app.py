@@ -30,7 +30,7 @@ from flightplanner.outlook import airport_outlook, hourly_rows, route_outlook
 from flightplanner.planner import (NOGO, CAUTION, Context, attach_terrain, candidate_plans, evaluate_plan,
                                    forecast_points, route_weather_rows, search_days)
 from flightplanner.terrain import Terrain
-from flightplanner.weather import AviationWeather, decode_metar, fetch_model_forecast
+from flightplanner.weather import AviationWeather, decode_metar, fetch_forecast
 
 st.set_page_config(page_title="C182 Trip Planner", page_icon="✈️", layout="wide")
 
@@ -73,8 +73,10 @@ def _om_key() -> str | None:
 
 @st.cache_resource(ttl=1200, show_spinner=False)
 def get_model_forecast(points: tuple[tuple[float, float], ...]):
-    # One shared forecast per route (all tabs), refreshed every 20 minutes.
-    return fetch_model_forecast(points, days=10, ttl_s=1200, api_key=_om_key())
+    # One shared forecast per route (all tabs), refreshed every 20 minutes:
+    # NWS grids (primary, 7 days) + Open-Meteo (winds aloft, days 8-10) when reachable.
+    fc, status = fetch_forecast(points, days=10, ttl_s=1200, api_key=_om_key())
+    return fc, {k: (v.ok, v.count, v.error) for k, v in status.items()}
 
 
 @st.cache_resource(ttl=300, show_spinner=False)
@@ -159,18 +161,19 @@ def forecast_for(plans):
     pts = forecast_points(plans) + [(a.lat, a.lon) for p in plans for a in p.airports]
     now = datetime.now(timezone.utc)
     if demo:
-        note_source("Model forecast (Open-Meteo)", True, "DEMO data")
+        note_source("Weather forecast", True, "DEMO data")
         return synthetic_forecast(pts, start=now - timedelta(hours=1), days=10)
     key = tuple(sorted({(round(a, 3), round(b, 3)) for a, b in pts}))
     try:
-        fc = get_model_forecast(key)
-        note_source("Model forecast (Open-Meteo)", True,
-                    f"{len(fc.series)} grid points, through {fc.horizon.astimezone(ZONE):%a %b %-d}"
-                    if fc.horizon else "")
-        return fc
+        fc, status = get_model_forecast(key)
     except Exception as e:
-        note_source("Model forecast (Open-Meteo)", False, str(e)[:150])
+        note_source("Weather forecast", False, str(e)[:200])
         raise
+    for name, (ok, count, err) in status.items():
+        note_source(name, ok, f"{count} grid points" if ok else friendly(Exception(err)))
+    if fc.horizon:
+        note_source("Forecast coverage", True, f"through {fc.horizon.astimezone(ZONE):%a %b %-d}")
+    return fc
 
 
 def as_range(w) -> tuple[date, date]:
