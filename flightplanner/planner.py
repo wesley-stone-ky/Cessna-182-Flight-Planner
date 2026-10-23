@@ -313,6 +313,8 @@ class Context:
     advisories: list[Advisory] = field(default_factory=list)
     tz: str = "America/New_York"
     now: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    wb: object | None = None        # flightplanner.wb.WeightBalance
+    loading: object | None = None   # flightplanner.wb.Loading (people/bags); fuel = ac.usable_gal
 
     def local(self, dt: datetime) -> datetime:
         return dt.astimezone(ZoneInfo(self.tz))
@@ -659,6 +661,14 @@ def evaluate_leg(ctx: Context, leg: Leg, li: int, dep_time: datetime, fuel_on_bo
                                     f"sunset {ctx.fmt(sset)} (day-only, {m.sunset_buffer_minutes:.0f} min buffer)",
                                     "night"))
 
+    # Weight & balance at takeoff and at landing (after this leg's burn)
+    if ctx.wb is not None and ctx.loading is not None:
+        from dataclasses import replace as _replace
+        wbr = ctx.wb.evaluate(_replace(ctx.loading, fuel_gal=fuel_on_board), burn_gal=sim["fuel"])
+        for level, text in wbr.problems:
+            if level == NOGO:
+                findings.append(Finding(NOGO, li, leg.dep.ident, f"Weight & balance: {text}", "wb"))
+
     # Fuel and fatigue
     reserve = m.reserve_minutes / 60 * ac.cruise_gph
     landing = fuel_on_board - sim["fuel"]
@@ -690,7 +700,7 @@ def _dedupe(findings: list[Finding]) -> list[Finding]:
     out: dict[tuple, Finding] = {}
     counts: dict[tuple, int] = {}
     for f in findings:
-        k = (f.leg, f.kind or f.text, f.level)
+        k = (f.leg, f.text if f.kind == "wb" else (f.kind or f.text), f.level)
         if k not in out:
             out[k] = f
             counts[k] = 1

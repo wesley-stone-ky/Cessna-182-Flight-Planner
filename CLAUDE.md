@@ -27,6 +27,12 @@ legal weather briefing.
   `flightplanner/outlook.py`; the Leaflet live map (NEXRAD radar tiles from IEM, advisories, PIREPs) is in
   `flightplanner/livemap.py`.
 - Fuel: 79 gal total confirmed by owner; usable set to 75 pending the selector placard.
+  (FAA TCDS 3A13 lists 92 total / 88 usable integral tanks for the 182R — confirm the airplane's records.)
+- Weight & balance: `flightplanner/wb.py`, limits/arms in `config/aircraft.yaml` (`weight_balance`).
+  Limits from TCDS 3A13 Model 182R (3,100 lb takeoff, 2,950 lb landing, CG +33.0→+40.9 fwd, +46.0 aft).
+  Empty weight/CG are EXAMPLE values until replaced from the airplane's W&B record.
+  The planner flies with the fuel the load allows (`wb_res.fuel_gal` → `ac.usable_gal`) and
+  checks W&B at each takeoff and landing (`Finding.kind == "wb"`).
 
 ## Rules
 - Safety first: when unsure, make a check MORE conservative and say why in the finding text.

@@ -503,3 +503,47 @@ def test_missing_runway_data_is_flagged(db, ac, mins):
     _check_airport(ctx, aw, 0, "arrival", out)
     assert aw.crosswind_kt is None
     assert any("crosswind not checked" in f.text for f in out)
+
+
+# --- weight & balance ---------------------------------------------------------
+def test_wb_normal_load_is_in_limits():
+    from flightplanner.wb import Loading, WeightBalance
+    wb = WeightBalance()
+    r = wb.evaluate(Loading(front_lb=340, bag_a_lb=40), burn_gal=35)
+    assert r.ok, r.problems
+    to, land = r.points[0], r.points[1]
+    assert to.weight_lb <= 3100 and land.weight_lb < to.weight_lb
+    assert 33.0 <= to.cg_in <= 46.0
+
+
+def test_wb_overweight_limits_fuel_and_flags_aft_cg():
+    from flightplanner.wb import Loading, WeightBalance
+    wb = WeightBalance()
+    heavy = Loading(front_lb=400, rear_lb=350, bag_a_lb=120, bag_b_lb=80)
+    assert wb.max_fuel(heavy) < 75                         # can't fill the tanks with this load
+    r = wb.evaluate(Loading(400, 350, 120, 80, fuel_gal=75))
+    texts = " ".join(t for _, t in r.problems)
+    assert not r.ok and "over the 3,100 lb" in texts and "aft of" in texts
+
+
+def test_wb_baggage_limits_and_envelope_edges():
+    from flightplanner.wb import Loading, WeightBalance
+    wb = WeightBalance()
+    r = wb.evaluate(Loading(340, 0, 150, 0, fuel_gal=40))
+    assert any("area A" in t for _, t in r.problems)
+    assert wb.fwd_limit(2250) == pytest.approx(33.0) and wb.fwd_limit(3100) == pytest.approx(40.9)
+    assert wb.fwd_limit(2675) == pytest.approx((33.0 + 40.9) / 2, abs=0.01)
+    assert wb.aft_limit(2800) == pytest.approx(46.0)
+
+
+def test_wb_problems_become_no_go_findings(db, mins):
+    from flightplanner.wb import Loading, WeightBalance
+    ac = Aircraft.load()
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)
+    ctx = _ctx(db, ac, mins, plans)
+    ctx.wb, ctx.loading = WeightBalance(), Loading(400, 350, 120, 80)
+    day = ctx.local(ctx.now).date() + timedelta(days=1)
+    from zoneinfo import ZoneInfo
+    dep = datetime(day.year, day.month, day.day, 9, tzinfo=ZoneInfo(ctx.tz)).astimezone(timezone.utc)
+    r = evaluate_plan(ctx, plans[0], dep)
+    assert r.status == "NO-GO" and any(f.kind == "wb" for f in r.findings)
