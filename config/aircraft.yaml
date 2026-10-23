@@ -17,10 +17,12 @@ avionics: "Garmin GTN 750Xi"
 equipment_suffix: "/G"         # GPS/WAAS - used when filing (verify with your ADS-B setup)
 
 fuel:
-  # VERIFY: 182Q/R "standard tanks" = 61 gal total / 56 gal usable.
-  # Long-range (wet wing) option on the 182R = 92 total / 88 usable.
-  # Check the placard on your fuel selector and POH Section 2.
-  usable_gal: 56
+  # Owner-confirmed: 79 gal TOTAL capacity. Cessna's ~80-gal-total 182 tanks
+  # carry 75 gal usable (5 gal unusable), so 75 is used here.
+  # VERIFY: the fuel selector placard ("BOTH - xx GAL") gives the exact usable
+  # number; change this line to match it.
+  total_gal: 79
+  usable_gal: 75
   start_taxi_takeoff_gal: 2.0   # VERIFY: POH "fuel allowance for engine start, taxi and takeoff"
 
 # Time / fuel / distance to climb FROM SEA LEVEL, at max gross, standard day.

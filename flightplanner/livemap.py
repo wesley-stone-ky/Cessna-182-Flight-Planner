@@ -56,22 +56,22 @@ def live_map_html(route_paths: list[list[tuple[float, float]]], airports: list[d
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<style>html,body{{margin:0;height:100%;font-family:system-ui,sans-serif}}#m{{height:{height}px;border-radius:10px}}
-.legend{{background:#fff;padding:6px 8px;border-radius:6px;font-size:12px;line-height:18px;box-shadow:0 1px 4px #0003}}
+<style>html,body{{margin:0;height:100%;font-family:system-ui,sans-serif;background:#0b1220}}#m{{height:{height}px;border-radius:10px}}
+.legend{{background:#152033;color:#e2e8f0;padding:6px 8px;border-radius:6px;font-size:12px;line-height:18px;box-shadow:0 1px 4px #0003}}
 .legend i{{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}}</style></head>
 <body><div id="m"></div><script>
 const D = {js_data};
 const map = L.map('m', {{zoomControl:true}});
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',
   {{attribution:'&copy; OpenStreetMap &copy; CARTO', maxZoom:12}}).addTo(map);
-const radar = L.tileLayer(D.radar + '?t=' + Date.now(), {{opacity:0.6, attribution:'NEXRAD via Iowa Environmental Mesonet'}}).addTo(map);
+const radar = L.tileLayer(D.radar + '?t=' + Date.now(), {{opacity:0.7, attribution:'NEXRAD via Iowa Environmental Mesonet'}}).addTo(map);
 const adv = L.layerGroup().addTo(map), pir = L.layerGroup().addTo(map), rte = L.layerGroup().addTo(map);
 D.polys.forEach(p => L.polygon(p.pts, {{color:p.color, weight:2, fillOpacity:0.12}}).bindPopup(p.label).addTo(adv));
 const all = [];
-D.routes.forEach(r => {{ L.polyline(r, {{color:'#1d4ed8', weight:4}}).addTo(rte); r.forEach(x => all.push(x)); }});
+D.routes.forEach(r => {{ L.polyline(r, {{color:'#38bdf8', weight:4}}).addTo(rte); r.forEach(x => all.push(x)); }});
 D.airports.forEach(a => {{
   const c = D.cats[a.cat] || '#64748b';
-  L.circleMarker([a.lat, a.lon], {{radius:9, color:'#111', weight:1, fillColor:c, fillOpacity:0.95}})
+  L.circleMarker([a.lat, a.lon], {{radius:9, color:'#e2e8f0', weight:1, fillColor:c, fillOpacity:0.95}})
    .bindPopup('<b>' + a.ident + '</b> ' + (a.cat||'no report') + '<br><code>' + (a.raw||'') + '</code>')
    .bindTooltip(a.ident + ' ' + (a.cat||''), {{permanent:true, direction:'right', offset:[8,0]}}).addTo(rte);
   all.push([a.lat, a.lon]);
@@ -81,6 +81,7 @@ D.pireps.forEach(p => L.circleMarker([p.lat, p.lon], {{radius:5, color: p.urgent
 if (all.length) map.fitBounds(all, {{padding:[30,30]}}); else map.setView([33,-83], 6);
 L.control.layers(null, {{'Radar (NEXRAD)':radar, 'AIRMET/SIGMET/G-AIRMET':adv, 'PIREPs':pir, 'Route':rte}},
   {{collapsed:false}}).addTo(map);
+const st = document.createElement('style'); st.textContent = '.leaflet-tooltip{{background:#152033;color:#e2e8f0;border-color:#334155}} .leaflet-popup-content-wrapper,.leaflet-popup-tip{{background:#152033;color:#e2e8f0}} .leaflet-control-layers{{background:#152033;color:#e2e8f0}}'; document.head.appendChild(st);
 const lg = L.control({{position:'bottomleft'}});
 lg.onAdd = () => {{ const d = L.DomUtil.create('div','legend');
   d.innerHTML = Object.entries(D.cats).map(([k,v]) => '<i style="background:'+v+'"></i>'+k).join('&nbsp; ')

@@ -32,6 +32,9 @@ SURFACE_VARS = (
     "freezing_level_height", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
 )
 LEVEL_VARS = ("wind_speed", "wind_direction", "temperature", "relative_humidity", "geopotential_height")
+# Cloud cover on pressure levels gives a much better cloud-base estimate than
+# surface fields alone. ~975 hPa is ~1,000 ft MSL, 700 hPa ~10,000 ft.
+CLOUD_LEVELS_HPA = (975, 950, 925, 900, 850, 800, 700)
 
 GRID = 0.25  # degrees; route points are snapped to this grid to share forecasts
 M_TO_FT = 3.28084
@@ -98,6 +101,7 @@ class WxPoint:
     wind_kt: float
     gust_kt: float
     levels: list[Level] = field(default_factory=list)
+    cloud_layers: list[tuple[float, float]] = field(default_factory=list)  # (height ft MSL, cover %)
 
     @property
     def thunder(self) -> bool:
@@ -115,7 +119,12 @@ class WxPoint:
         classic convective-base rule) and saturated pressure levels.
         This is a SCREENING estimate. TAFs override it near the airports.
         """
-        if self.low_cloud >= 60:
+        agl_layers = sorted((h - self.surface_elev_ft, c) for h, c in self.cloud_layers
+                            if h - self.surface_elev_ft > 0)
+        layer_base = next((h for h, c in agl_layers if c >= 60 and h <= 10000), None)
+        if self.low_cloud >= 60 or (layer_base is not None and layer_base < 9800):
+            if self.low_cloud < 60 and layer_base is not None:
+                return max(200.0, layer_base)
             base = 3000.0
             if self.temp_c is not None and self.dew_c is not None:
                 base = max(0.0, self.temp_c - self.dew_c) * 400.0
@@ -123,6 +132,8 @@ class WxPoint:
                    if lv.rh >= 92 and lv.height_ft_msl - self.surface_elev_ft > 0]
             if sat:
                 base = min(base, min(sat)) if base > 500 else base
+            if layer_base is not None:
+                base = min(base, layer_base)
             if self.vis_sm is not None and self.vis_sm < 1 and self.wcode in (45, 48):
                 base = min(base, 200.0)
             return max(200.0, min(base, 9800.0))
@@ -221,6 +232,11 @@ class GridForecast:
                 temp_c=float(g(f"temperature_{p}hPa", 0.0)),
                 rh=float(g(f"relative_humidity_{p}hPa", 50.0)),
             ))
+        layers = []
+        for p in CLOUD_LEVELS_HPA:
+            z, cc = g(f"geopotential_height_{p}hPa"), g(f"cloud_cover_{p}hPa")
+            if z is not None and cc is not None:
+                layers.append((float(z) * M_TO_FT, float(cc)))
         vis = g("visibility")
         fzl = g("freezing_level_height")
         wp = WxPoint(
@@ -234,7 +250,7 @@ class GridForecast:
             wcode=int(g("weather_code", 0) or 0), cape=float(g("cape", 0) or 0),
             freezing_level_ft=(float(fzl) * M_TO_FT) if fzl is not None else None,
             wind_dir=float(g("wind_direction_10m", 0) or 0), wind_kt=float(g("wind_speed_10m", 0) or 0),
-            gust_kt=float(g("wind_gusts_10m", 0) or 0), levels=levels,
+            gust_kt=float(g("wind_gusts_10m", 0) or 0), levels=levels, cloud_layers=layers,
         )
         self._cache[ck] = wp
         return wp
@@ -262,6 +278,11 @@ def fetch_model_forecast(points: Iterable[tuple[float, float]], days: int = 16,
                          session: requests.Session | None = None, ttl_s: int = 3600) -> GridForecast:
     keys = sorted({snap(la, lo) for la, lo in points})
     hourly = list(SURFACE_VARS) + [f"{v}_{p}hPa" for p in LEVELS_HPA for v in LEVEL_VARS]
+    for p in CLOUD_LEVELS_HPA:
+        for v in ("cloud_cover", "geopotential_height"):
+            name = f"{v}_{p}hPa"
+            if name not in hourly:
+                hourly.append(name)
     sess = session or requests.Session()
     series: dict[tuple[float, float], dict] = {}
     for start in range(0, len(keys), 25):
@@ -279,6 +300,12 @@ def fetch_model_forecast(points: Iterable[tuple[float, float]], days: int = 16,
         data = _cache_get(ck, ttl_s)
         if data is None:
             r = sess.get(OPEN_METEO_URL, params=params, timeout=60, headers={"User-Agent": USER_AGENT})
+            if r.status_code == 400:
+                # A variable the API doesn't know about shouldn't take the whole app down:
+                # retry with only the core surface + wind fields.
+                core = list(SURFACE_VARS) + [f"{v}_{p}hPa" for p in LEVELS_HPA for v in LEVEL_VARS]
+                r = sess.get(OPEN_METEO_URL, params=dict(params, hourly=",".join(core)), timeout=60,
+                             headers={"User-Agent": USER_AGENT})
             r.raise_for_status()
             data = r.json()
             _cache_put(ck, data)
@@ -362,19 +389,94 @@ def _ceiling(clouds) -> float | None:
     return best
 
 
-class AviationWeather:
-    """Thin client for aviationweather.gov Data API (rate limit: 100 req/min)."""
+@dataclass
+class Pirep:
+    time: datetime | None
+    lat: float
+    lon: float
+    alt_ft: float | None
+    aircraft: str
+    turb: str
+    icing: str
+    wx: str
+    raw: str
+    urgent: bool = False
 
-    def __init__(self, session: requests.Session | None = None, ttl_s: int = 600):
+
+@dataclass
+class SourceStatus:
+    name: str
+    ok: bool = True
+    count: int = 0
+    fetched_at: datetime | None = None
+    error: str = ""
+
+
+def flight_category(ceiling_ft: float | None, vis_sm: float | None) -> str:
+    """FAA flight categories (AIM 7-1): VFR / MVFR / IFR / LIFR."""
+    c = 99999 if ceiling_ft is None else ceiling_ft
+    v = 99 if vis_sm is None else vis_sm
+    if c < 500 or v < 1:
+        return "LIFR"
+    if c < 1000 or v < 3:
+        return "IFR"
+    if c <= 3000 or v <= 5:
+        return "MVFR"
+    return "VFR"
+
+
+def decode_metar(m: dict) -> dict:
+    """Pull the fields a pilot looks at first out of an AWC METAR JSON record."""
+    wd = m.get("wdir")
+    cig = _ceiling(m.get("clouds"))
+    vis = _vis(m.get("visib"))
+    return {
+        "station": m.get("icaoId", ""),
+        "time": to_utc(m.get("obsTime")) or to_utc(m.get("reportTime")),
+        "category": m.get("fltCat") or flight_category(cig, vis),
+        "wind_dir": None if isinstance(wd, str) else wd,
+        "wind_text": ("VRB" if isinstance(wd, str) else f"{int(wd or 0):03d}") + f"@{m.get('wspd', 0)}"
+                     + (f"G{m['wgst']}" if m.get("wgst") else "") + " kt",
+        "wind_kt": m.get("wspd"),
+        "gust_kt": m.get("wgst"),
+        "vis_sm": vis,
+        "ceiling_ft": cig,
+        "clouds": " ".join(f"{c.get('cover', '')}{int(c['base'] / 100):03d}" if c.get("base") is not None
+                           else str(c.get("cover", "")) for c in (m.get("clouds") or [])) or m.get("cover", ""),
+        "temp_c": m.get("temp"),
+        "dew_c": m.get("dewp"),
+        "altim_inhg": round(float(m["altim"]) * 0.02953, 2) if m.get("altim") else None,
+        "wx": m.get("wxString") or "",
+        "raw": m.get("rawOb", ""),
+        "lat": m.get("lat"),
+        "lon": m.get("lon"),
+    }
+
+
+class AviationWeather:
+    """Client for the aviationweather.gov Data API (limit: 100 requests/min).
+
+    Small airports often have no TAF (KGGE, KSPG and KTPF don't). For those we
+    borrow the nearest TAF within ~40 nm and say which one we used.
+    """
+
+    def __init__(self, session: requests.Session | None = None, ttl_s: int = 300):
         self.sess = session or requests.Session()
-        self.sess.headers.update({"User-Agent": USER_AGENT})
+        try:
+            self.sess.headers.update({"User-Agent": USER_AGENT})
+        except AttributeError:
+            pass
         self.ttl = ttl_s
         self.errors: list[str] = []
+        self.status: dict[str, SourceStatus] = {}
 
-    def _get(self, path: str, params: dict):
+    def _get(self, path: str, params: dict, label: str | None = None):
+        label = label or path
+        st = self.status.setdefault(label, SourceStatus(label))
         ck = "awc_" + hashlib.sha1((path + json.dumps(params, sort_keys=True)).encode()).hexdigest()[:16]
         cached = _cache_get(ck, self.ttl)
         if cached is not None:
+            st.fetched_at = st.fetched_at or _cache_time(ck)
             return cached
         try:
             r = self.sess.get(f"{AWC_BASE}/{path}", params=params, timeout=30)
@@ -384,26 +486,35 @@ class AviationWeather:
                 r.raise_for_status()
                 data = r.json()
         except Exception as e:  # network / parse problems are reported, not fatal
-            self.errors.append(f"{path}: {e}")
+            st.ok = False
+            st.error = str(e)[:200]
+            self.errors.append(f"{label}: {e}")
             return []
+        st.fetched_at = datetime.now(timezone.utc)
         _cache_put(ck, data)
         return data
 
+    # -- METAR / TAF ---------------------------------------------------------
     def metars(self, ids: list[str]) -> dict[str, dict]:
-        data = self._get("metar", {"ids": ",".join(ids), "format": "json", "hours": 2})
+        if not ids:
+            return {}
+        data = self._get("metar", {"ids": ",".join(ids), "format": "json", "hours": 3}, "METARs")
         out: dict[str, dict] = {}
         for m in data if isinstance(data, list) else []:
             sid = m.get("icaoId") or m.get("stationId")
-            if sid and sid not in out:
+            if sid and sid not in out:   # newest first
                 out[sid] = m
+        self.status["METARs"].count = len(out)
         return out
 
     def tafs(self, ids: list[str]) -> dict[str, dict]:
-        data = self._get("taf", {"ids": ",".join(ids), "format": "json"})
+        if not ids:
+            return {}
+        data = self._get("taf", {"ids": ",".join(ids), "format": "json"}, "TAFs")
         out: dict[str, dict] = {}
         for t in data if isinstance(data, list) else []:
             sid = t.get("icaoId") or t.get("stationId")
-            if not sid:
+            if not sid or sid in out:
                 continue
             periods = []
             for f in t.get("fcsts", []) or []:
@@ -420,12 +531,42 @@ class AviationWeather:
                     float(f["wspd"]) if f.get("wspd") is not None else None,
                     float(f["wgst"]) if f.get("wgst") is not None else None,
                     _vis(f.get("visib")), _ceiling(f.get("clouds")), str(f.get("wxString") or "")))
-            out[sid] = {"raw": t.get("rawTAF", ""), "periods": periods}
+            out[sid] = {"raw": t.get("rawTAF", ""), "periods": periods, "station": sid,
+                        "issued": to_utc(t.get("issueTime")), "lat": t.get("lat"), "lon": t.get("lon")}
+        self.status["TAFs"].count = len(out)
         return out
 
+    def for_airports(self, airports, nearby, max_nm: float = 40.0):
+        """METAR + TAF for each airport, borrowing the nearest station's when missing.
+
+        `nearby(airport)` returns candidate (ident, distance_nm) pairs, nearest first.
+        Returns (metars, tafs) keyed by the ROUTE airport ident; each record has
+        'station' and 'dist_nm' so the UI can say "TAF from KMYR, 27 nm".
+        """
+        ids = [a.ident for a in airports]
+        cand: dict[str, list[tuple[str, float]]] = {
+            a.ident: [(i, d) for i, d in nearby(a) if d <= max_nm][:8] for a in airports}
+        all_ids = sorted(set(ids) | {i for lst in cand.values() for i, _ in lst})
+        metars = self.metars(all_ids)
+        tafs = self.tafs(all_ids)
+        m_out, t_out = {}, {}
+        for a in airports:
+            options = [(a.ident, 0.0)] + cand[a.ident]
+            for sid, d in options:
+                if sid in metars:
+                    m_out[a.ident] = dict(metars[sid], _station=sid, _dist_nm=d)
+                    break
+            for sid, d in options:
+                if sid in tafs:
+                    t_out[a.ident] = dict(tafs[sid], station=sid, dist_nm=d)
+                    break
+        return m_out, t_out
+
+    # -- Advisories / PIREPs ------------------------------------------------
     def advisories(self) -> list[Advisory]:
         out: list[Advisory] = []
-        for item in self._get("airsigmet", {"format": "json"}) or []:
+        sig = self._get("airsigmet", {"format": "json"}, "AIRMET/SIGMET") or []
+        for item in sig:
             poly = [(float(c["lat"]), float(c["lon"])) for c in item.get("coords", []) or []
                     if "lat" in c and "lon" in c]
             if len(poly) < 3:
@@ -437,17 +578,56 @@ class AviationWeather:
             out.append(Advisory(kind, hazard, to_utc(item.get("validTimeFrom")), to_utc(item.get("validTimeTo")),
                                 poly, _num(item.get("altitudeLow1")), _num(item.get("altitudeHi1")),
                                 str(item.get("rawAirSigmet", ""))))
-        for item in self._get("gairmet", {"format": "json"}) or []:
+        self.status["AIRMET/SIGMET"].count = len(out)
+        g = self._get("gairmet", {"format": "json"}, "G-AIRMETs") or []
+        n = 0
+        for item in g:
             poly = [(float(c["lat"]), float(c["lon"])) for c in item.get("coords", []) or []
                     if "lat" in c and "lon" in c]
             if len(poly) < 3:
                 continue
             vt = to_utc(item.get("validTime"))
+            n += 1
             out.append(Advisory("G-AIRMET", str(item.get("hazard", "")).upper(),
                                 vt - timedelta(hours=1, minutes=30) if vt else None,
                                 vt + timedelta(hours=1, minutes=30) if vt else None,
-                                poly, _alt(item.get("base")), _alt(item.get("top"))))
+                                poly, _alt(item.get("base")), _alt(item.get("top")),
+                                str(item.get("due_to") or item.get("dueTo") or "")))
+        self.status["G-AIRMETs"].count = n
         return out
+
+    def pireps(self, points: list[tuple[str, float]], age_h: int = 2) -> list[Pirep]:
+        """PIREPs within `distance` nm of each (station_ident, distance_nm)."""
+        seen, out = set(), []
+        for sid, dist in points:
+            data = self._get("pirep", {"id": sid, "distance": int(dist), "age": age_h, "format": "json"},
+                             "PIREPs") or []
+            for p in data:
+                raw = p.get("rawOb", "")
+                if raw in seen:
+                    continue
+                seen.add(raw)
+                try:
+                    lat, lon = float(p.get("lat")), float(p.get("lon"))
+                except (TypeError, ValueError):
+                    continue
+                fl = _num(p.get("fltLvl"))
+                turb = " ".join(x for x in (p.get("tbInt1"), p.get("tbType1")) if x)
+                ice = " ".join(x for x in (p.get("icgInt1"), p.get("icgType1")) if x)
+                out.append(Pirep(to_utc(p.get("obsTime")), lat, lon, fl * 100 if fl is not None else None,
+                                 str(p.get("acType") or ""), turb, ice, str(p.get("wxString") or ""), raw,
+                                 str(p.get("pirepType", "")).upper() == "URGENT PIREP" or " UUA " in raw))
+        if "PIREPs" in self.status:
+            self.status["PIREPs"].count = len(out)
+        return out
+
+
+def _cache_time(key: str) -> datetime | None:
+    path = CACHE_DIR / f"{key}.json"
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
 
 
 def _num(v) -> float | None:

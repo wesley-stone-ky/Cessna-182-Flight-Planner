@@ -23,6 +23,11 @@ legal weather briefing.
 - Aircraft numbers come only from `config/aircraft.yaml`. Never hard-code performance.
 - All times are UTC internally; display uses `Context.local()` (America/New_York).
 
+- UI: `app.py` has 3 tabs (Trip planner, 10-day outlook, Before you go/live). Outlook logic is in
+  `flightplanner/outlook.py`; the Leaflet live map (NEXRAD radar tiles from IEM, advisories, PIREPs) is in
+  `flightplanner/livemap.py`.
+- Fuel: 79 gal total confirmed by owner; usable set to 75 pending the selector placard.
+
 ## Rules
 - Safety first: when unsure, make a check MORE conservative and say why in the finding text.
 - Keep the "screening only — get an official briefing" disclaimer in the UI and exports.

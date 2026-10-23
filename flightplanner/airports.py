@@ -119,6 +119,19 @@ class AirportDB:
         hits.sort(key=lambda a: (not a.ident.lower().startswith(t), a.ident))
         return hits[:limit]
 
+    def nearby(self, ap: Airport, max_nm: float = 40.0, limit: int = 8) -> list[tuple[str, float]]:
+        """Nearby stations to borrow a METAR/TAF from: bigger airports first (they
+        are the ones with TAFs), then by distance."""
+        cands = []
+        for o in self.airports.values():
+            if o.ident == ap.ident or not o.ident.startswith("K") or len(o.ident) != 4:
+                continue
+            d = haversine_nm(ap.lat, ap.lon, o.lat, o.lon)
+            if d <= max_nm:
+                cands.append((o.type == "small_airport", d, o.ident))
+        cands.sort()
+        return [(i, d) for _, d, i in cands[:limit]]
+
     def corridor(self, a: Airport, b: Airport, max_xt_nm: float,
                  min_rwy_ft: float, frac_lo: float = 0.0, frac_hi: float = 1.0) -> list[tuple[Airport, float, float]]:
         """Airports near the a->b course: (airport, cross_track_nm, along_track_nm)."""

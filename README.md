@@ -23,6 +23,24 @@ be typed in.
 
 ---
 
+## Three tabs
+
+- **🗓️ Trip planner:** finds the best days, departure times and routes in your travel window. For the
+  day you pick, it shows the forecast at every 20-nm point along the route at your ETA.
+- **🌤️ 10-day outlook:** daily weather at each airport (good flying hours, best window, lowest ceiling,
+  wind and gusts, rain, storms, winds at 6,000 ft), an hour-by-hour view, and an en-route summary showing
+  how much room the clouds leave over the terrain.
+- **🛫 Before you go (live):** use it the morning of the flight. It shows:
+  - current METARs with VFR/MVFR/IFR/LIFR badges
+  - TAFs at your departure and arrival times
+  - a live NEXRAD radar map with AIRMET/SIGMET/G-AIRMET areas and pilot reports
+  - a fresh go/no-go for "leave now / in 1 hour / at 9:30"
+
+  It can auto-refresh every 5 minutes. Small airports without a TAF (KGGE, KSPG, KTPF) borrow the
+  nearest one (KMYR, KTPA/KPIE) and say so.
+
+The sidebar lists every data source with a ✅ or ❌ and when it was last pulled.
+
 ## What it does
 
 1. **Builds route options.** It always tries nonstop first. If the leg won't fit your usable fuel plus
@@ -109,8 +127,9 @@ The free plan allows one private app at a time, which is all you need here.
 
 ## ⚠️ Before you trust the numbers: edit `config/aircraft.yaml`
 
-The aircraft profile holds **planning estimates** for a 182R with standard tanks: 56 gal usable,
-65% power at about 11.8 gph and 126–136 KTAS. Open your POH and replace each `VERIFY` value:
+The aircraft profile is set to **79 gal total / 75 gal usable** (owner-confirmed total; usable assumed),
+65% power at about 11.8 gph and 126–136 KTAS. Those cruise numbers are estimates. Open your POH and
+replace each `VERIFY` value:
 
 - **Section 2 (Limitations):** usable fuel. Standard tanks on the 182Q/R are 61 gal total / 56 gal
   usable; long-range tanks are 88 gal usable. Check the placard on your fuel selector.
@@ -119,9 +138,9 @@ The aircraft profile holds **planning estimates** for a 182R with standard tanks
 
 After a few flights, tune `ktas` and `gph` to what the 750Xi and your fuel totalizer actually show.
 
-With 56 gal usable and a 1-hour reserve, **KLEX → St. Pete (≈625 nm) always needs one fuel stop.**
-KLEX → Georgetown (≈385 nm) is usually nonstop but gets tight with a strong headwind. The app handles
-both.
+With 75 gal usable and a 1-hour reserve, **KLEX → St. Pete (≈625 nm)** is right at the edge of the fuel
+and well past a 3.5-hour leg, so the app plans one fuel stop. **KLEX → Georgetown (≈385 nm)** is nonstop
+with a comfortable margin.
 
 `config/minimums.yaml` holds your personal minimums. Everything in it can also be adjusted from the
 sidebar.

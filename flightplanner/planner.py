@@ -20,6 +20,7 @@ NOGO, CAUTION, INFO = "NO-GO", "CAUTION", "INFO"
 STATUS_RANK = {"GO": 0, "MARGINAL": 1, "NO-GO": 2}
 WX_STEP_NM = 20.0
 FREEZING_PRECIP = {56, 57, 66, 67}
+IGNORED_HAZARDS = {"FZLVL", "TURB-HI"}  # freezing-level contours / jet-altitude turbulence
 
 
 # ---------------------------------------------------------------------------
@@ -410,15 +411,18 @@ def _airport_wx(ctx: Context, ap: Airport, when: datetime) -> AirportWx | None:
     taf = ctx.tafs.get(ap.ident)
     prevailing, temps = taf_at(taf, when) if taf else (None, [])
     if prevailing is not None:
-        aw = AirportWx(ap.ident, when, "TAF", prevailing.ceiling_ft, prevailing.vis_sm,
+        src = "TAF"
+        if taf.get("station") and taf.get("station") != ap.ident:
+            src = f"TAF from {taf['station']}, {taf.get('dist_nm', 0):.0f} nm away"
+        aw = AirportWx(ap.ident, when, src, prevailing.ceiling_ft, prevailing.vis_sm,
                        prevailing.wind_dir, prevailing.wind_kt, prevailing.gust_kt, prevailing.wx)
         for tp in temps:  # use the worse of prevailing / TEMPO for screening
             if tp.ceiling_ft is not None and (aw.ceiling_ft is None or tp.ceiling_ft < aw.ceiling_ft):
                 aw.ceiling_ft = tp.ceiling_ft
-                aw.source = "TAF incl. TEMPO/PROB"
+                aw.source = src + " incl. TEMPO/PROB"
             if tp.vis_sm is not None and (aw.vis_sm is None or tp.vis_sm < aw.vis_sm):
                 aw.vis_sm = tp.vis_sm
-                aw.source = "TAF incl. TEMPO/PROB"
+                aw.source = src + " incl. TEMPO/PROB"
             if tp.gust_kt and (aw.gust_kt or 0) < tp.gust_kt:
                 aw.gust_kt = tp.gust_kt
             if tp.wx and tp.wx not in aw.wx:
@@ -560,7 +564,7 @@ def evaluate_leg(ctx: Context, leg: Leg, li: int, dep_time: datetime, fuel_on_bo
                 findings.append(Finding(CAUTION, li, where, f"Strong winds over ridges ({wspd5:.0f} kt) {where}: "
                                         "expect turbulence / mountain wave", "turb"))
         for adv in ctx.advisories:
-            if not adv.covers(la, lo, eta, pt_alt):
+            if adv.hazard in IGNORED_HAZARDS or not adv.covers(la, lo, eta, pt_alt):
                 continue
             hz = adv.hazard
             if "CONV" in hz or adv.kind == "CONVECTIVE SIGMET":
@@ -581,12 +585,16 @@ def evaluate_leg(ctx: Context, leg: Leg, li: int, dep_time: datetime, fuel_on_bo
 
     # Daylight
     if m.day_only:
-        rise, _ = sun_times(leg.dep.lat, leg.dep.lon, dep_time, ctx.tz)
-        _, sset = sun_times(leg.arr.lat, leg.arr.lon, arr_time, ctx.tz)
+        rise, dep_sset = sun_times(leg.dep.lat, leg.dep.lon, dep_time, ctx.tz)
+        arr_rise, sset = sun_times(leg.arr.lat, leg.arr.lon, arr_time, ctx.tz)
         if dep_time < rise:
             findings.append(Finding(NOGO, li, leg.dep.ident, f"Departs {leg.dep.ident} before sunrise "
                                     f"({ctx.fmt(rise)})", "night"))
-        if arr_time > sset - timedelta(minutes=m.sunset_buffer_minutes):
+        elif dep_time > dep_sset:
+            findings.append(Finding(NOGO, li, leg.dep.ident, f"Departs {leg.dep.ident} after sunset "
+                                    f"({ctx.fmt(dep_sset)})", "night"))
+        if arr_time < arr_rise or ctx.local(arr_time).date() != ctx.local(dep_time).date() \
+                or arr_time > sset - timedelta(minutes=m.sunset_buffer_minutes):
             findings.append(Finding(NOGO, li, leg.arr.ident, f"Lands {leg.arr.ident} at {ctx.fmt(arr_time)}, "
                                     f"sunset {ctx.fmt(sset)} (day-only, {m.sunset_buffer_minutes:.0f} min buffer)",
                                     "night"))
@@ -702,3 +710,36 @@ def search_days(ctx: Context, plans: list[RoutePlan], start: date, end: date,
         results.append(DayResult(day, options[0] if options else None, options, by_hour))
         day += timedelta(days=1)
     return results
+
+
+def route_weather_rows(ctx: Context, r: PlanResult) -> list[dict]:
+    """What the forecast says at each 20-nm point along the plan, at your ETA there."""
+    rows = []
+    for lr in r.legs:
+        leg = lr.leg
+        cs = next((p.dist_nm for p in lr.profile if p.alt_ft == lr.alt_ft), 0)
+        for p, (la, lo, d) in zip(lr.profile, leg.samples):
+            wx = ctx.forecast.at(la, lo, p.eta)
+            if wx is None:
+                rows.append({"Leg": f"{leg.dep.ident}-{leg.arr.ident}", "ETA": ctx.fmt(p.eta),
+                             "Where": _near(ctx, la, lo), "Conditions": "beyond forecast range"})
+                continue
+            wdir, wspd, t_alt, _ = wx.wind_at(p.alt_ft if p.alt_ft > 2000 else lr.alt_ft)
+            gs, _ = wind_triangle(leg.true_course, 100, wdir, wspd)
+            comp = gs - 100
+            cig = wx.ceiling_agl_ft()
+            rows.append({
+                "Leg": f"{leg.dep.ident}-{leg.arr.ident}",
+                "ETA": ctx.fmt(p.eta),
+                "Where": _near(ctx, la, lo).replace("near ", ""),
+                "Conditions": wx.wx_text,
+                "Cloud base (MSL)": "none" if cig is None else f"{wx.surface_elev_ft + cig:,.0f}",
+                "Terrain": f"{p.terrain_ft:,.0f}",
+                "Vis (sm)": "—" if wx.vis_sm is None else ("10+" if wx.vis_sm >= 10 else f"{wx.vis_sm:.0f}"),
+                "Rain %": f"{wx.precip_prob:.0f}",
+                "Storm risk": "HIGH" if wx.thunder or wx.cape >= ctx.mins.cape_nogo_jkg else
+                              ("some" if wx.cape >= ctx.mins.cape_caution_jkg else "low"),
+                f"Wind @ {lr.alt_ft:,.0f}": f"{wdir:03.0f}@{wspd:.0f} ({'tail' if comp >= 0 else 'head'} {abs(comp):.0f})",
+                "Temp @ alt": "—" if t_alt is None else f"{t_alt:.0f}°C",
+            })
+    return rows
