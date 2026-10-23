@@ -673,7 +673,7 @@ with tab_fly:
             now = datetime.now(timezone.utc)
             for ap in aps:
                 st.subheader(f"{ap.ident} — {ap.name}")
-                answers = can_i_fly(fc, ap, mins, TZ, now)
+                answers = can_i_fly(fc, ap, mins, ap.tz, now)
                 cols = [st.container(border=True) for _ in answers] if PHONE else \
                     [c.container(border=True) for c in st.columns(len(answers))]
                 for col, (label, a) in zip(cols, answers):
