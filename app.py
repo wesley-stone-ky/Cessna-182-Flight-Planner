@@ -32,8 +32,8 @@ def _reload_stale_modules() -> None:
         import flightplanner as pkg  # first import
         pkg._source_stamp = stamp
         return
-    for name in ("config", "geo", "sun", "airports", "aircraft", "weather", "nws", "terrain",
-                 "planner", "outlook", "export", "livemap", "demo"):
+    for name in ("config", "geo", "sun", "airports", "aircraft", "registry", "wb", "weather", "nws", "terrain",
+                 "planner", "outlook", "weekend", "export", "livemap", "demo"):
         mod = sys.modules.get(f"flightplanner.{name}")
         if mod is not None:
             importlib.reload(mod)
@@ -52,19 +52,21 @@ import pandas as pd
 import pydeck as pdk
 import streamlit.components.v1 as components
 
-from flightplanner.aircraft import Aircraft
+from flightplanner.aircraft import Aircraft, catalog, deep_merge
 from flightplanner.airports import FAVORITES, AirportDB
-from flightplanner.config import load_minimums
+from flightplanner.config import load_minimums, load_yaml
 from flightplanner.demo import synthetic_forecast
 from flightplanner.export import leg_fpl, leg_gfp, navlog_csv, text_brief
 from flightplanner.geo import haversine_nm
 from flightplanner.livemap import live_map_html
 from flightplanner.outlook import airport_outlook, hourly_rows, route_outlook
+from flightplanner.registry import lookup as registry_lookup, normalize_n
 from flightplanner.planner import (NOGO, CAUTION, Context, attach_terrain, candidate_plans, evaluate_plan,
                                    forecast_points, route_weather_rows, search_days)
 from flightplanner.terrain import Terrain
 from flightplanner.weather import AviationWeather, decode_metar, fetch_forecast
 from flightplanner.wb import Loading, WeightBalance
+from flightplanner.weekend import GO, MARGINAL, NOGO, can_i_fly
 
 st.set_page_config(page_title="C182 Planner", page_icon="✈️", layout="wide")
 
@@ -182,8 +184,9 @@ def get_awc(airport_ids: tuple[str, ...], pirep_points: tuple[tuple[str, float],
 # ---------------------------------------------------------------------------
 # Sidebar: aircraft + minimums + data status
 # ---------------------------------------------------------------------------
-base_ac = Aircraft.load()
+my_profile = load_yaml("aircraft.yaml")     # the home airplane (Dad's 182R)
 base_mins = load_minimums()
+CATALOG = catalog()
 
 if PHONE:
     st.markdown("## ✈️ C182 Trip Planner")
@@ -193,13 +196,56 @@ else:
 
 with settings_parent:
     st.header("✈️ Aircraft")
-    st.caption(f"{base_ac.raw.get('model')} · {base_ac.raw.get('avionics')}")
+    my_tail = my_profile.get("tail_number", "")
+    tail_in = st.text_input("Tail number", "" if my_tail.strip("N_ ") == "" else my_tail, placeholder="N12345",
+                            help="Looked up in the FAA aircraft registry to find the make, model and year.")
+    reg = registry_lookup(tail_in) if tail_in.strip() else None
+    if tail_in.strip() and reg is None:
+        st.warning(f"{tail_in.strip().upper()} isn't in the FAA registry extract (piston airplanes only). "
+                   "Pick the type below.")
+    elif reg:
+        st.write(f"**{reg.n_number}**: {reg.description}")
+        if not reg.type_id:
+            st.info("That model isn't in the list yet. Pick the closest type below and enter your own cruise speed "
+                    "and fuel burn.")
+        if reg.engine_note():
+            st.warning(reg.engine_note())
+    type_ids = sorted(CATALOG, key=lambda t: CATALOG[t].name)
+    want_t = reg.type_id if reg and reg.type_id else my_profile.get("type")
+    type_id = st.selectbox("Type", type_ids, index=type_ids.index(want_t) if want_t in type_ids else 0,
+                           format_func=lambda t: CATALOG[t].name)
+    # Dad's own numbers (fuel, empty weight) only apply to Dad's airplane.
+    is_home = type_id == my_profile.get("type") and normalize_n(tail_in) in ("", normalize_n(my_tail))
+    profile = my_profile if is_home else {"type": type_id, "tail_number": reg.n_number if reg else ""}
+    base_ac = Aircraft.load(profile=profile)
+    st.caption(" · ".join(x for x in (base_ac.raw.get("model") or base_ac.raw.get("name"),
+                                       base_ac.raw.get("engine"), base_ac.raw.get("avionics")) if x))
+    if not base_ac.verified:
+        st.caption("ℹ️ Typical numbers for this type, not checked against your POH. Tune your speed and fuel "
+                   "burn below.")
     settings = list(base_ac.raw["cruise_settings"].keys())
     setting = st.selectbox("Cruise power", settings,
                            index=settings.index(base_ac.raw.get("default_cruise_setting", settings[0])))
-    usable = st.number_input("Usable fuel (gal)", 20.0, 120.0, float(base_ac.usable_gal), 1.0,
+    usable = st.number_input("Usable fuel (gal)", 20.0, 120.0, float(base_ac.usable_gal), 1.0, key=f"usable_{type_id}",
                              help="The number on the fuel selector placard ('BOTH – xx GAL').")
-    cs = base_ac.raw["cruise_settings"][setting]
+    base_set = Aircraft.load(cruise_setting=setting, profile=profile)
+    tune_box = st.container() if PHONE else st.expander("Tune to your airplane")
+    with tune_box:
+        my_ktas = st.number_input("Your cruise speed at 6,000 ft (KTAS)", 60, 250, int(round(base_set.ktas(6000))), 1,
+                                  key=f"ktas_{type_id}_{setting}")
+        my_gph = st.number_input("Your fuel burn (gal/h)", 3.0, 30.0, float(base_set.cruise_gph), 0.1,
+                                 key=f"gph_{type_id}_{setting}")
+        st.caption(f"At {setting} power. Defaults come from the type's typical numbers; use what your airplane "
+                   "actually shows.")
+    tune: dict = {}
+    if abs(my_gph - base_set.cruise_gph) > 0.01:
+        tune.setdefault("cruise_settings", {}).setdefault(setting, {})["gph"] = my_gph
+    if my_ktas != int(round(base_set.ktas(6000))):
+        k = my_ktas / base_set.ktas(6000)
+        tune.setdefault("cruise_settings", {}).setdefault(setting, {})["ktas"] = {
+            a: round(v * k, 1) for a, v in base_set.setting["ktas"].items()}
+    profile = deep_merge(profile, tune)
+    cs = Aircraft.load(cruise_setting=setting, profile=profile).setting
     if PHONE:   # no expanders inside expanders
         st.caption(f"{setting} power: {cs['gph']} gph, " + ", ".join(f"{k}: {v} kt" for k, v in cs["ktas"].items()))
     else:
@@ -224,45 +270,54 @@ with settings_parent:
     ground = st.slider("Time on the ground at a fuel stop (min)", 20, 120, int(base_mins.fuel_stop_ground_minutes), 5)
 
     st.header("⚖️ Load")
-    wb_calc = WeightBalance(usable_gal=usable)
-    wl1, wl2 = (st.container(), st.container()) if PHONE else st.columns(2)
-    with wl1:
-        w_front = st.number_input("Pilot + front seat (lb)", 0, 600, 340, 5,
-                                  help="Both front seats together, with clothes.")
-        w_bag_a = st.number_input("Bags behind rear seat, area A (lb)", 0, 200, 30, 5,
-                                  help="Max 120 lb in area A; 200 lb total baggage.")
-    with wl2:
-        w_rear = st.number_input("Rear seats (lb)", 0, 500, 0, 5)
-        w_bag_b = st.number_input("Bags far aft, area B (lb)", 0, 120, 0, 5, help="Max 80 lb in area B.")
-    fuel_mode = st.radio("Fuel at takeoff", ["Full (or as much as weight allows)", "Custom"], horizontal=False)
-    w_fuel = None
-    if fuel_mode == "Custom":
-        w_fuel = st.number_input("Gallons at takeoff", 5.0, float(usable), float(min(usable, 60.0)), 1.0)
-    loading = Loading(front_lb=w_front, rear_lb=w_rear, bag_a_lb=w_bag_a, bag_b_lb=w_bag_b, fuel_gal=w_fuel)
-    wb_res = wb_calc.evaluate(loading, burn_gal=0.0)
-    to_pt, zf_pt = wb_res.points[0], wb_res.points[2]
-    if all(lv != "NO-GO" or t.startswith("Landing") for lv, t in wb_res.problems):
-        st.success(f"Takeoff {to_pt.weight_lb:,.0f} lb · CG {to_pt.cg_in:.1f} in · {wb_res.fuel_gal:.0f} gal")
-    for level, text in wb_res.problems:
-        if text.startswith("Landing"):
-            continue   # landing weight/CG is checked per leg, after that leg's fuel burn
-        (st.error if level == "NO-GO" else st.info)(text)
-    if wb_res.example_empty:
-        st.warning("Using an EXAMPLE empty weight. Put the airplane's real empty weight and CG "
-                   "(from its weight & balance record) in `config/aircraft.yaml`.")
-    env = wb_calc.envelope_polygon()
-    chart_pts = pd.DataFrame([{"CG (in)": p.cg_in, "Weight (lb)": p.weight_lb, "Point": p.label}
-                              for p in wb_res.points])
-    env_df = pd.DataFrame([{"CG (in)": a, "Weight (lb)": w, "i": i} for i, (a, w) in enumerate(env + [env[0]])])
-    st.altair_chart(
-        (alt.Chart(env_df).mark_line(color="#38bdf8").encode(
-            x=alt.X("CG (in):Q", scale=alt.Scale(domain=[30, 50])),
-            y=alt.Y("Weight (lb):Q", scale=alt.Scale(domain=[1700, 3200])), order="i:Q")
-         + alt.Chart(chart_pts).mark_point(filled=True, size=90).encode(
-            x="CG (in):Q", y="Weight (lb):Q", color=alt.Color("Point:N", legend=alt.Legend(orient="bottom")),
-            tooltip=["Point", "Weight (lb)", "CG (in)"])).properties(height=220),
-        width="stretch")
-    st.caption("Blue outline = allowed CG range (FAA TCDS 3A13, Model 182R). Each leg is also checked at landing.")
+    ac_tuned = Aircraft.load(cruise_setting=setting, profile=profile)
+    if ac_tuned.has_weight_balance:
+        wb_calc = WeightBalance(raw=ac_tuned.raw, usable_gal=usable)
+        wl1, wl2 = (st.container(), st.container()) if PHONE else st.columns(2)
+        with wl1:
+            w_front = st.number_input("Pilot + front seat (lb)", 0, 600, 340, 5,
+                                      help="Both front seats together, with clothes.")
+            w_bag_a = st.number_input("Bags behind rear seat, area A (lb)", 0, 200, 30, 5,
+                                      help="Max 120 lb in area A; 200 lb total baggage.")
+        with wl2:
+            w_rear = st.number_input("Rear seats (lb)", 0, 500, 0, 5)
+            w_bag_b = st.number_input("Bags far aft, area B (lb)", 0, 120, 0, 5, help="Max 80 lb in area B.")
+        fuel_mode = st.radio("Fuel at takeoff", ["Full (or as much as weight allows)", "Custom"], horizontal=False)
+        w_fuel = None
+        if fuel_mode == "Custom":
+            w_fuel = st.number_input("Gallons at takeoff", 5.0, float(usable), float(min(usable, 60.0)), 1.0)
+        loading = Loading(front_lb=w_front, rear_lb=w_rear, bag_a_lb=w_bag_a, bag_b_lb=w_bag_b, fuel_gal=w_fuel)
+        wb_res = wb_calc.evaluate(loading, burn_gal=0.0)
+        to_pt, zf_pt = wb_res.points[0], wb_res.points[2]
+        if all(lv != "NO-GO" or t.startswith("Landing") for lv, t in wb_res.problems):
+            st.success(f"Takeoff {to_pt.weight_lb:,.0f} lb · CG {to_pt.cg_in:.1f} in · {wb_res.fuel_gal:.0f} gal")
+        for level, text in wb_res.problems:
+            if text.startswith("Landing"):
+                continue   # landing weight/CG is checked per leg, after that leg's fuel burn
+            (st.error if level == "NO-GO" else st.info)(text)
+        if wb_res.example_empty:
+            st.warning("Using an EXAMPLE empty weight. Put the airplane's real empty weight and CG "
+                       "(from its weight & balance record) in `config/aircraft.yaml`.")
+        env = wb_calc.envelope_polygon()
+        chart_pts = pd.DataFrame([{"CG (in)": p.cg_in, "Weight (lb)": p.weight_lb, "Point": p.label}
+                                  for p in wb_res.points])
+        env_df = pd.DataFrame([{"CG (in)": a, "Weight (lb)": w, "i": i} for i, (a, w) in enumerate(env + [env[0]])])
+        st.altair_chart(
+            (alt.Chart(env_df).mark_line(color="#38bdf8").encode(
+                x=alt.X("CG (in):Q", scale=alt.Scale(domain=[30, 50])),
+                y=alt.Y("Weight (lb):Q", scale=alt.Scale(domain=[1700, 3200])), order="i:Q")
+             + alt.Chart(chart_pts).mark_point(filled=True, size=90).encode(
+                x="CG (in):Q", y="Weight (lb):Q", color=alt.Color("Point:N", legend=alt.Legend(orient="bottom")),
+                tooltip=["Point", "Weight (lb)", "CG (in)"])).properties(height=220),
+            width="stretch")
+        st.caption(f"Blue outline = allowed CG range ({wb_calc.c.get('envelope_source', 'type data')}). "
+                   "Each leg is also checked at landing.")
+        plan_fuel = wb_res.fuel_gal
+    else:
+        wb_calc = loading = None
+        plan_fuel = usable
+        st.caption(f"Weight & balance isn't set up for this type yet. Plans assume {usable:.0f} gal at takeoff; "
+                   "check your weight & balance before flight.")
 
     # Offline demo forecast is for development only: add ?demo=1 to the URL to use it.
     demo = st.query_params.get("demo") == "1"
@@ -277,7 +332,7 @@ with settings_parent:
         st.caption("🖥️ [Desktop view](?view=desktop)")
 
 # The planner flies with the fuel your load allows (may be less than full tanks).
-ac = Aircraft.load(cruise_setting=setting, overrides={"fuel.usable_gal": round(wb_res.fuel_gal, 1)})
+ac = Aircraft.load(cruise_setting=setting, overrides={"fuel.usable_gal": round(plan_fuel, 1)}, profile=profile)
 mins = load_minimums({
     "flight_rules": rules, "airport_min_ceiling_ft_agl": cig, "airport_min_vis_sm": vis,
     "max_crosswind_kt": xw, "reserve_minutes": reserve, "max_leg_hours": max_leg,
@@ -296,12 +351,16 @@ def get_plans(dep_ident: str, dest_ident: str, settings_key: tuple):
 
 
 def plans_for(dep_ident: str, dest_ident: str):
-    key = (round(wb_res.fuel_gal, 1), setting, reserve, max_leg, rules, cig, vis, xw, day_only)
+    key = (type_id, my_ktas, round(my_gph, 1), round(plan_fuel, 1), setting, reserve, max_leg, rules, cig, vis, xw,
+           day_only)
     return get_plans(dep_ident, dest_ident, key)
 
 
 def forecast_for(plans):
-    pts = forecast_points(plans) + [(a.lat, a.lon) for p in plans for a in p.airports]
+    return forecast_at(forecast_points(plans) + [(a.lat, a.lon) for p in plans for a in p.airports])
+
+
+def forecast_at(pts):
     now = datetime.now(timezone.utc)
     if demo:
         note_source("Weather forecast", True, "DEMO data")
@@ -376,9 +435,9 @@ except KeyError as e:
     st.error(str(e).strip('"'))
     valid_pair = False
 
-tab_plan, tab_outlook, tab_live = st.tabs(
-    ["🗓️ Plan", "🌤️ Outlook", "🛫 Go / no-go"] if PHONE else
-    ["🗓️ Trip planner", "🌤️ 7-day outlook", "🛫 Before you go (live)"])
+tab_fly, tab_plan, tab_outlook, tab_live = st.tabs(
+    ["✅ Fly?", "🗓️ Plan", "🌤️ Outlook", "🛫 Go / no-go"] if PHONE else
+    ["✅ Can I fly?", "🗓️ Trip planner", "🌤️ 7-day outlook", "🛫 Before you go (live)"])
 
 
 def metric_grid(items: list[tuple[str, str]]) -> None:
@@ -601,6 +660,35 @@ def show_direction(title: str, res: dict, key: str):
                 "Why": " · ".join(h.top_reasons(1)) or "—"} for h in d.by_hour]),
                 hide_index=True, width="stretch")
 
+
+FLY_ICON = {GO: "🟢 GO", MARGINAL: "🟡 MARGINAL", NOGO: "🔴 NO-GO"}
+
+with tab_fly:
+    st.caption("Today, tomorrow and the weekend at your airports, checked hour by hour against your airport "
+               "minimums (ceiling, visibility, wind, gusts, storms; daylight only). Same answer as the weekend email.")
+    if valid_pair:
+        try:
+            aps = [db.get(dep_id)] + ([db.get(dest_id)] if dest_id != dep_id else [])
+            fc = forecast_at([(a.lat, a.lon) for a in aps])
+            now = datetime.now(timezone.utc)
+            for ap in aps:
+                st.subheader(f"{ap.ident} — {ap.name}")
+                answers = can_i_fly(fc, ap, mins, ap.tz, now)
+                cols = [st.container(border=True) for _ in answers] if PHONE else \
+                    [c.container(border=True) for c in st.columns(len(answers))]
+                for col, (label, a) in zip(cols, answers):
+                    with col:
+                        st.markdown(f"**{label}** · {a.day:%a %b %-d}")
+                        st.markdown(f"### {FLY_ICON.get(a.verdict, '⚪ ' + a.verdict)}")
+                        if a.window != "—":
+                            st.markdown(f"Best **{a.window}**")
+                        st.caption(a.reason)
+            st.caption(f"Your minimums: ceiling {mins.airport_min_ceiling_ft_agl:,.0f} ft, visibility "
+                       f"{mins.airport_min_vis_sm:.0f} sm, wind {mins.max_surface_wind_kt:.0f} kt, gusts "
+                       f"{mins.max_gust_kt:.0f} kt. Forecast: National Weather Service 7-day grid. For today, also "
+                       "check METARs and TAFs on the Before you go tab.")
+        except Exception as e:
+            st.error(f"Couldn't get the forecast: {friendly(e)}")
 
 with tab_plan:
     st.caption("Pick your travel window. The planner tries every departure time and route option against the "

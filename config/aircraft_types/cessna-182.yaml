@@ -1,0 +1,155 @@
+# ---------------------------------------------------------------------------
+# Cessna 182 Skylane family (normally aspirated, fixed gear)
+# ---------------------------------------------------------------------------
+# TYPICAL planning numbers assembled from Cessna 182 handbook data and owner
+# reports. NOT a substitute for the airplane's POH/AFM. `verified: false`
+# makes the app say so. An owner's own numbers (config/aircraft.yaml or their
+# profile) always win over these.
+#
+# Variants override only what differs from `base`. Fuel: when the owner hasn't
+# confirmed their usable fuel, the app uses the SMALLEST `fuel_options` entry.
+# `faa_models` are the exact MODEL strings in the FAA registry (ACFTREF.txt).
+# Turbo (T182, TR182) and retractable (R182) models are deliberately absent.
+# ---------------------------------------------------------------------------
+family: cessna-182
+make: Cessna
+faa_mfr: "^(CESSNA|TEXTRON)"
+
+base:
+  verified: false
+  default_cruise_setting: "65%"
+  climb_ktas: 90
+  # Time / fuel / distance to climb FROM SEA LEVEL, max gross, standard day.
+  # The app subtracts the departure-airport row.
+  climb_table:
+    - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
+    - {alt_ft: 2000,  minutes: 3,  gal: 1.0, nm: 5}
+    - {alt_ft: 4000,  minutes: 6,  gal: 2.0, nm: 11}
+    - {alt_ft: 6000,  minutes: 10, gal: 3.0, nm: 18}
+    - {alt_ft: 8000,  minutes: 15, gal: 4.3, nm: 27}
+    - {alt_ft: 10000, minutes: 21, gal: 5.7, nm: 39}
+    - {alt_ft: 12000, minutes: 29, gal: 7.4, nm: 55}
+  descent:
+    fpm: 500
+    gph: 9.0
+    ktas_bonus: 5
+  # Recommended lean, standard temperature, KTAS by pressure altitude.
+  cruise_settings:
+    "75%":
+      gph: 13.5
+      ktas: {2000: 134, 4000: 136, 6000: 138, 8000: 141}   # 75% not available much above 8000
+      max_alt_ft: 8000
+    "65%":
+      gph: 11.8
+      ktas: {2000: 126, 4000: 128, 6000: 131, 8000: 133, 10000: 135, 12000: 136}
+      max_alt_ft: 12000
+    "55%":
+      gph: 10.2
+      ktas: {2000: 115, 4000: 117, 6000: 120, 8000: 122, 10000: 124, 12000: 125}
+      max_alt_ft: 12500
+  limits:
+    max_demonstrated_crosswind_kt: 15   # POH demonstrated crosswind (not a limitation)
+    service_ceiling_ft: 18100
+    max_planning_alt_ft: 10500          # no supplemental O2 planned (14 CFR 91.211)
+  fuel:
+    start_taxi_takeoff_gal: 2.0
+
+variants:
+  "182A-N":
+    name: Cessna 182 Skylane (1956-1971, 182 through 182N)
+    years: [1956, 1971]
+    engine: Continental O-470, 230 hp
+    faa_models: ["182", "182A", "182B", "182C", "182D", "182E", "182F", "182G", "182H", "182J", "182K", "182L", "182M", "182N"]
+    fuel_options:
+      standard:   {total_gal: 65, usable_gal: 55}
+      long_range: {total_gal: 84, usable_gal: 79}
+
+  "182P":
+    name: Cessna 182P Skylane
+    years: [1972, 1976]
+    engine: Continental O-470-R/S, 230 hp
+    faa_models: ["182P"]
+    fuel_options:
+      standard:   {total_gal: 65, usable_gal: 60}
+      long_range: {total_gal: 84, usable_gal: 79}
+
+  "182Q":
+    name: Cessna 182Q Skylane
+    years: [1977, 1980]
+    engine: Continental O-470-U, 230 hp
+    faa_models: ["182Q"]
+    fuel_options:
+      standard:   {total_gal: 65, usable_gal: 60}
+      long_range: {total_gal: 84, usable_gal: 79}
+
+  "182R":
+    name: Cessna 182R Skylane
+    years: [1981, 1986]
+    engine: Continental O-470-U, 230 hp
+    faa_models: ["182R"]
+    fuel_options:
+      standard:   {total_gal: 65, usable_gal: 60}
+      long_range: {total_gal: 80, usable_gal: 75}
+    # FAA Type Certificate Data Sheet 3A13 (Model 182R): max 3,100 lb takeoff, 2,950 lb landing;
+    # C.G. forward +33.0 in at 2,250 lb or less, straight line to +40.9 in at 3,100 lb; aft +46.0 in.
+    # Datum: front face of the firewall. Station arms are typical 182R POH Section 6 values.
+    # Empty weight and arm are per-airplane: they belong in the owner's profile.
+    weight_balance:
+      max_takeoff_lb: 3100
+      max_landing_lb: 2950
+      fuel_lb_per_gal: 6.0
+      fuel_arm_in: 46.5
+      stations:
+        front_seats: {arm_in: 37.0}
+        rear_seats:  {arm_in: 74.0}
+        baggage_a:   {arm_in: 97.0,  max_lb: 120}
+        baggage_b:   {arm_in: 116.0, max_lb: 80}
+      baggage_total_max_lb: 200
+      cg_envelope:
+        forward: [[2250, 33.0], [3100, 40.9]]
+        aft:     [[2250, 46.0], [3100, 46.0]]
+      envelope_source: FAA TCDS 3A13, Model 182R
+
+  "182S":
+    name: Cessna 182S Skylane
+    years: [1997, 2000]
+    engine: Lycoming IO-540-AB1A5, 230 hp
+    faa_models: ["182S"]
+    fuel_options:
+      standard: {total_gal: 92, usable_gal: 88}
+    descent: {gph: 9.5}
+    cruise_settings:
+      "75%":
+        gph: 14.0
+        ktas: {2000: 135, 4000: 138, 6000: 140, 8000: 143}
+        max_alt_ft: 8000
+      "65%":
+        gph: 12.2
+        ktas: {2000: 127, 4000: 130, 6000: 132, 8000: 134, 10000: 136, 12000: 137}
+        max_alt_ft: 12000
+      "55%":
+        gph: 10.6
+        ktas: {2000: 116, 4000: 119, 6000: 121, 8000: 123, 10000: 125, 12000: 126}
+        max_alt_ft: 12500
+
+  "182T":
+    name: Cessna 182T Skylane
+    years: [2001, 2026]
+    engine: Lycoming IO-540-AB1A5, 230 hp
+    faa_models: ["182T"]
+    fuel_options:
+      standard: {total_gal: 92, usable_gal: 87}
+    descent: {gph: 9.5}
+    cruise_settings:
+      "75%":
+        gph: 14.0
+        ktas: {2000: 135, 4000: 138, 6000: 140, 8000: 143}
+        max_alt_ft: 8000
+      "65%":
+        gph: 12.2
+        ktas: {2000: 127, 4000: 130, 6000: 132, 8000: 134, 10000: 136, 12000: 137}
+        max_alt_ft: 12000
+      "55%":
+        gph: 10.6
+        ktas: {2000: 116, 4000: 119, 6000: 121, 8000: 123, 10000: 125, 12000: 126}
+        max_alt_ft: 12500

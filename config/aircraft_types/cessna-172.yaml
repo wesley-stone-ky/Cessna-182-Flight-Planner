@@ -1,0 +1,152 @@
+# ---------------------------------------------------------------------------
+# Cessna 172 Skyhawk family (fixed gear, normally aspirated)
+# ---------------------------------------------------------------------------
+# TYPICAL planning numbers, deliberately on the slow / thirsty side of what
+# owners report. NOT a substitute for the airplane's POH/AFM; `verified:
+# false` makes the app say so. An owner's own numbers always win.
+# Fuel: the app uses the SMALLEST `fuel_options` entry until the owner
+# confirms their usable fuel. No weight & balance data yet for this family.
+# Not included: 172RG (retractable), R172 / FR172 (Hawk XP), turbo models.
+# ---------------------------------------------------------------------------
+family: cessna-172
+make: Cessna
+faa_mfr: "^(CESSNA|TEXTRON)"
+
+base:
+  verified: false
+  default_cruise_setting: "65%"
+  climb_ktas: 75
+  climb_table:
+    - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
+    - {alt_ft: 2000,  minutes: 3,  gal: 0.7, nm: 4}
+    - {alt_ft: 4000,  minutes: 6,  gal: 1.3, nm: 9}
+    - {alt_ft: 6000,  minutes: 10, gal: 2.0, nm: 14}
+    - {alt_ft: 8000,  minutes: 15, gal: 2.9, nm: 21}
+    - {alt_ft: 10000, minutes: 21, gal: 3.9, nm: 30}
+    - {alt_ft: 12000, minutes: 31, gal: 5.3, nm: 43}
+  descent:
+    fpm: 500
+    gph: 6.0
+    ktas_bonus: 5
+  cruise_settings:
+    "75%":
+      gph: 8.6
+      ktas: {2000: 113, 4000: 115, 6000: 117, 8000: 119}
+      max_alt_ft: 8000
+    "65%":
+      gph: 7.6
+      ktas: {2000: 106, 4000: 108, 6000: 111, 8000: 113, 10000: 114}
+      max_alt_ft: 10000
+    "55%":
+      gph: 6.6
+      ktas: {2000: 98, 4000: 100, 6000: 102, 8000: 104, 10000: 105, 12000: 105}
+      max_alt_ft: 12000
+  limits:
+    max_demonstrated_crosswind_kt: 15
+    service_ceiling_ft: 13000
+    max_planning_alt_ft: 10500
+  fuel:
+    start_taxi_takeoff_gal: 1.4
+
+variants:
+  "172-172M":
+    name: Cessna 172 Skyhawk (1956-1976, 172 through 172M)
+    years: [1956, 1976]
+    engine: Continental O-300 145 hp / Lycoming O-320-E2D 150 hp
+    faa_models: ["172", "172A", "172B", "172C", "172D", "172E", "172F", "172G", "172H", "172I", "172K", "172L", "172M"]
+    fuel_options:
+      standard:   {total_gal: 39, usable_gal: 35}
+      long_range: {total_gal: 52, usable_gal: 48}
+    climb_table:
+      - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
+      - {alt_ft: 2000,  minutes: 4,  gal: 0.8, nm: 5}
+      - {alt_ft: 4000,  minutes: 8,  gal: 1.5, nm: 10}
+      - {alt_ft: 6000,  minutes: 12, gal: 2.3, nm: 16}
+      - {alt_ft: 8000,  minutes: 18, gal: 3.3, nm: 25}
+      - {alt_ft: 10000, minutes: 26, gal: 4.6, nm: 36}
+    cruise_settings:
+      "75%":
+        gph: 7.8
+        ktas: {2000: 105, 4000: 107, 6000: 109, 8000: 110}
+        max_alt_ft: 8000
+      "65%":
+        gph: 6.9
+        ktas: {2000: 99, 4000: 101, 6000: 103, 8000: 104, 10000: 104}
+        max_alt_ft: 10000
+      "55%":
+        gph: 6.0
+        ktas: {2000: 91, 4000: 93, 6000: 95, 8000: 96, 10000: 96}
+        max_alt_ft: 10000
+    limits: {service_ceiling_ft: 12000}
+
+  "172N":
+    name: Cessna 172N Skyhawk
+    years: [1977, 1980]
+    engine: Lycoming O-320-H2AD, 160 hp
+    faa_models: ["172N"]
+    fuel_options:
+      standard:   {total_gal: 43, usable_gal: 40}
+      long_range: {total_gal: 52, usable_gal: 48}
+    limits: {service_ceiling_ft: 14200}
+
+  "172P":
+    name: Cessna 172P Skyhawk
+    years: [1981, 1986]
+    engine: Lycoming O-320-D2J, 160 hp
+    faa_models: ["172P", "172Q"]
+    fuel_options:
+      standard:   {total_gal: 43, usable_gal: 40}
+      long_range: {total_gal: 62, usable_gal: 54}
+
+  "172R":
+    name: Cessna 172R Skyhawk
+    years: [1996, 2026]
+    engine: Lycoming IO-360-L2A, 160 hp
+    faa_models: ["172R"]
+    fuel_options:
+      standard: {total_gal: 56, usable_gal: 53}
+    cruise_settings:
+      "75%":
+        gph: 8.8
+        ktas: {2000: 114, 4000: 117, 6000: 119, 8000: 121}
+        max_alt_ft: 8000
+      "65%":
+        gph: 7.8
+        ktas: {2000: 107, 4000: 110, 6000: 112, 8000: 114, 10000: 115}
+        max_alt_ft: 10000
+      "55%":
+        gph: 6.8
+        ktas: {2000: 99, 4000: 101, 6000: 103, 8000: 105, 10000: 106, 12000: 106}
+        max_alt_ft: 12000
+
+  "172S":
+    name: Cessna 172S Skyhawk SP
+    years: [1998, 2026]
+    engine: Lycoming IO-360-L2A, 180 hp
+    faa_models: ["172S"]
+    fuel_options:
+      standard: {total_gal: 56, usable_gal: 53}
+    climb_ktas: 80
+    climb_table:
+      - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
+      - {alt_ft: 2000,  minutes: 3,  gal: 0.8, nm: 4}
+      - {alt_ft: 4000,  minutes: 5,  gal: 1.4, nm: 7}
+      - {alt_ft: 6000,  minutes: 8,  gal: 2.1, nm: 11}
+      - {alt_ft: 8000,  minutes: 12, gal: 2.9, nm: 17}
+      - {alt_ft: 10000, minutes: 16, gal: 3.8, nm: 23}
+      - {alt_ft: 12000, minutes: 22, gal: 4.9, nm: 32}
+    descent: {gph: 6.5}
+    cruise_settings:
+      "75%":
+        gph: 10.0
+        ktas: {2000: 118, 4000: 121, 6000: 123, 8000: 125}
+        max_alt_ft: 8000
+      "65%":
+        gph: 8.8
+        ktas: {2000: 111, 4000: 114, 6000: 116, 8000: 118, 10000: 119}
+        max_alt_ft: 10000
+      "55%":
+        gph: 7.6
+        ktas: {2000: 103, 4000: 105, 6000: 107, 8000: 109, 10000: 110, 12000: 110}
+        max_alt_ft: 12000
+    limits: {service_ceiling_ft: 14000}

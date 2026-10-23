@@ -12,6 +12,7 @@ legal weather briefing.
 - Run: `source .venv/bin/activate && streamlit run app.py`
 - Tests: `python -m pytest -q` (offline; uses synthetic weather and fallback terrain)
 - Refresh airports: `python scripts/build_airport_data.py`
+- Refresh FAA registry: `python scripts/build_faa_registry.py`
 
 ## Architecture
 - `flightplanner/planner.py` is the core: `candidate_plans` → `attach_terrain` →
@@ -21,7 +22,12 @@ legal weather briefing.
   weather.nws_series and nws.py) plus
   `weather.AviationWeather` (TAF/METAR/AIRMET/SIGMET/G-AIRMET from aviationweather.gov).
   Set a User-Agent and keep AWC under 100 requests/min.
-- Aircraft numbers come only from `config/aircraft.yaml`. Never hard-code performance.
+- Aircraft numbers come only from the type catalog (`config/aircraft_types/<family>.yaml`, base +
+  variants) and the owner's profile (`config/aircraft.yaml`: `type:` + overrides, which win). Never
+  hard-code performance. Keep catalog types `verified: false` until checked against a real POH.
+  Unconfirmed fuel uses the smallest tank option. Dad's 182R is pinned by a golden test.
+- Tail numbers: `flightplanner/registry.py` (FAA registry extract in data/, no owner data; rebuild
+  with `python scripts/build_faa_registry.py`, monthly at most).
 - All times are UTC internally; display uses `Context.local()` (America/New_York).
 
 - NWS has no winds/humidity aloft: `WxPoint.aloft_estimated` is set, and the planner then gives no tailwind

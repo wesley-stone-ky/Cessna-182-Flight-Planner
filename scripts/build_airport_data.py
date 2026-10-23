@@ -7,9 +7,12 @@ Run from the repo root:
     python scripts/build_airport_data.py            # downloads fresh copies
     python scripts/build_airport_data.py --offline  # uses data/raw/*.csv
 
-Keeps public-use-looking airports in the Southeast/Ohio Valley with at least
-one open, hard-surface runway of 2,500 ft or more. That is plenty for a C182
-and keeps the file small enough to commit.
+Keeps public-use-looking US airports with at least one open, hard-surface
+runway of 2,500 ft or more, and adds each airport's time zone (IANA name).
+That is plenty for a C182 and keeps the file small enough to commit.
+
+Needs `pip install timezonefinder` (build time only; the app just reads the
+tz column).
 """
 from __future__ import annotations
 
@@ -26,11 +29,7 @@ OUT_RUNWAYS = ROOT / "data" / "runways.csv"
 
 BASE = "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/"
 
-REGIONS = {
-    "US-KY", "US-TN", "US-NC", "US-SC", "US-GA", "US-FL", "US-AL", "US-VA",
-    "US-WV", "US-OH", "US-IN", "US-MS", "US-IL", "US-MO", "US-AR", "US-LA",
-    "US-MD", "US-PA",
-}
+COUNTRY = "US"
 TYPES = {"small_airport", "medium_airport", "large_airport"}
 HARD = ("ASP", "CON", "PEM", "BIT", "ASPH", "CONC", "TARMAC", "PAVED")
 MIN_RWY_FT = 2500
@@ -58,13 +57,18 @@ def main() -> None:
     ap.add_argument("--offline", action="store_true")
     args = ap.parse_args()
 
+    try:
+        from timezonefinder import TimezoneFinder
+    except ImportError:
+        sys.exit("pip install timezonefinder  (needed to add each airport's time zone)")
+    tzf = TimezoneFinder()
     airports_raw = fetch("airports.csv", args.offline)
     runways_raw = fetch("runways.csv", args.offline)
 
     candidates: dict[str, dict] = {}
     with open(airports_raw, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            if row["iso_region"] not in REGIONS or row["type"] not in TYPES:
+            if row["iso_country"] != COUNTRY or row["type"] not in TYPES:
                 continue
             if "(Private)" in row["name"] or "private" in row["keywords"].lower():
                 continue
@@ -90,16 +94,17 @@ def main() -> None:
         wa = csv.writer(fa)
         wr = csv.writer(fr)
         wa.writerow(["ident", "name", "type", "lat", "lon", "elev_ft", "region",
-                     "city", "longest_rwy_ft", "lighted"])
+                     "city", "longest_rwy_ft", "lighted", "tz"])
         wr.writerow(["ident", "rwy", "heading_true", "length_ft", "surface", "lighted"])
         for aid, rws in runways.items():
             a = candidates[aid]
             ident = a["gps_code"] or a["icao_code"] or a["ident"]
             longest = max(int(float(r["length_ft"])) for r in rws)
             lighted = int(any(r["lighted"] == "1" for r in rws))
+            tz = tzf.timezone_at(lat=float(a["latitude_deg"]), lng=float(a["longitude_deg"])) or ""
             wa.writerow([ident, a["name"], a["type"], a["latitude_deg"], a["longitude_deg"],
                          a["elevation_ft"] or 0, a["iso_region"], a["municipality"],
-                         longest, lighted])
+                         longest, lighted, tz])
             n += 1
             for r in rws:
                 for end, hdg in (("le", "le_heading_degT"), ("he", "he_heading_degT")):

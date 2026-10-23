@@ -627,3 +627,168 @@ def test_weekend_email_says_no_data_past_the_forecast(db, ac, mins):
     far = ctx.local(ctx.now).date() + timedelta(days=20)
     wk = weekend_for(ctx.forecast, db.get("KLEX"), mins, ctx.tz, far)
     assert all(d.verdict == NODATA for d in wk.days)
+
+
+# --- aircraft catalog ---------------------------------------------------------
+def test_dads_182r_numbers_are_unchanged():
+    """Golden values for the home airplane, captured before the aircraft catalog refactor."""
+    from flightplanner.wb import Loading, WeightBalance
+    expect = {"75%": (13.5, [134.0, 137.0, 141.0, 141.0], 8000.0),
+              "65%": (11.8, [126.0, 129.5, 133.0, 135.5], 10500.0),
+              "55%": (10.2, [115.0, 118.5, 122.0, 124.5], 10500.0)}
+    for s, (gph, ktas, mx) in expect.items():
+        a = Aircraft.load(cruise_setting=s)
+        assert a.cruise_gph == gph and [a.ktas(x) for x in (2000, 5000, 8000, 11000)] == ktas
+        assert a.max_alt_ft == mx
+    a = Aircraft.load()
+    assert a.cruise_setting == "65%" and a.usable_gal == 75 and a.taxi_gal == 2 and a.demo_xwind == 15
+    assert a.climb_speed_kt() == 90 and "182R" in a.name
+    c, d = a.climb(979, 6500), a.descent(6500, 26)
+    assert (c.minutes, c.gal, c.nm) == pytest.approx((9.7815, 2.8355, 17.8025), abs=1e-3)
+    assert (d.minutes, d.gal, d.nm) == pytest.approx((12.948, 1.9422, 29.4567), abs=1e-3)
+    assert a.still_air_leg(380, 979, 26, 6500, 10) == pytest.approx((3.1174, 39.0933), abs=1e-3)
+    r = WeightBalance().evaluate(Loading(340, 0, 40, 0), burn_gal=35)
+    assert r.fuel_gal == 75 and not r.problems
+    assert [(p.label, round(p.weight_lb), round(p.cg_in, 2)) for p in r.points] == \
+        [("Takeoff", 2680, 39.84), ("Landing", 2470, 39.27), ("Zero fuel", 2230, 38.49)]
+
+
+def test_every_catalog_type_is_sane():
+    from flightplanner.aircraft import catalog
+    cat = catalog()
+    assert len(cat) >= 12
+    for tid, t in cat.items():
+        a = Aircraft.from_type(tid)
+        r = a.raw
+        lo, hi = t.years
+        assert 1940 < lo <= hi <= 2030, tid
+        assert r.get("engine") and r.get("name") and r.get("faa_models"), tid
+        assert 10 <= a.demo_xwind <= 25, tid
+        assert 0 < a.usable_gal < r["fuel"]["total_gal"] <= 120, tid
+        # power settings: more power = more fuel and more speed, at every shared altitude
+        sets = sorted(r["cruise_settings"].items(), key=lambda kv: -float(kv[0].rstrip("%")))
+        for (hi_s, hi_v), (lo_s, lo_v) in zip(sets, sets[1:]):
+            assert hi_v["gph"] > lo_v["gph"], (tid, hi_s, lo_s)
+            for alt in set(hi_v["ktas"]) & set(lo_v["ktas"]):
+                assert hi_v["ktas"][alt] > lo_v["ktas"][alt], (tid, alt)
+        for s_, v in r["cruise_settings"].items():
+            ks = [v["ktas"][k] for k in sorted(v["ktas"])]
+            assert ks == sorted(ks) and 85 <= ks[0] <= 160, (tid, s_)
+            assert 5 <= v["gph"] <= 20, (tid, s_)
+        # still-air range at 65% with a 45-min reserve: something a real airplane could do
+        a65 = Aircraft.from_type(tid, "65%")
+        nm = (a65.usable_gal - a65.taxi_gal - 0.75 * a65.cruise_gph) / a65.cruise_gph * a65.ktas(6000)
+        assert 200 < nm < 1100, (tid, round(nm))
+        rows = r["climb_table"]
+        for k in ("minutes", "gal", "nm"):
+            vals = [row[k] for row in sorted(rows, key=lambda x: x["alt_ft"])]
+            assert vals == sorted(vals) and vals[0] == 0, (tid, k)
+        assert a.climb_speed_kt() < a.ktas(4000) and r["descent"]["gph"] < a.cruise_gph, tid
+        assert not t.verified, f"{tid}: only mark verified after checking a real POH"
+
+
+def test_owner_numbers_win_and_smallest_tank_is_default():
+    a = Aircraft.from_type("cessna-172/172P")
+    assert a.usable_gal == 40                       # standard tanks until the owner says otherwise
+    b = Aircraft.from_type("cessna-172/172P", fuel={"usable_gal": 54, "total_gal": 62})
+    assert b.usable_gal == 54
+    c = Aircraft.from_type("cessna-172/172P", fuel_option="long_range")
+    assert c.usable_gal == 54
+    d = Aircraft.from_type("cessna-172/172P", cruise_settings={"65%": {"gph": 8.0}})
+    assert d.cruise_gph == 8.0 and d.ktas(6000) == 111   # only the gph was tuned
+    assert not a.has_weight_balance and not a.verified
+    assert Aircraft.load().has_weight_balance and Aircraft.load().type_id == "cessna-182/182R"
+
+
+def test_other_types_plan_a_trip(db, mins):
+    from flightplanner.aircraft import catalog
+    for tid in ("cessna-172/172N", "piper-pa28/PA-28-181", "piper-pa28/PA-28R", "cessna-182/182T"):
+        a = Aircraft.from_type(tid)
+        plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), a, mins)
+        assert plans, tid
+        ctx = _ctx(db, a, mins, plans)
+        r = evaluate_plan(ctx, plans[0], _morning(ctx))
+        assert r.legs and all(lr.fuel_at_landing_gal > 0 for lr in r.legs), tid
+        for lr in r.legs:
+            assert lr.fuel_used_gal < a.usable_gal, tid
+    slow = candidate_plans(db, db.get("KLEX"), db.get("KSPG"), Aircraft.from_type("cessna-172/172-172M"), mins)
+    assert all(p.stops for p in slow), "a 35-gal 172 can't do KLEX-KSPG nonstop"
+
+
+# --- FAA registry lookup --------------------------------------------------------
+@pytest.fixture
+def fake_registry(tmp_path, monkeypatch):
+    import gzip as _gz
+    from flightplanner import registry as R
+    with _gz.open(tmp_path / "faa_aircraft.csv.gz", "wt") as f:
+        f.write("n_number,year,model_code,engine_code\n"
+                "1014F,1979,2072738,17026\n101SP,1986,2073020,41525\n2RX,2004,1150020,41540\n77AB,,9999999,\n")
+    (tmp_path / "faa_models.csv").write_text(
+        "code,mfr,model,type_acft,build_cert,engines,seats\n"
+        "2072738,CESSNA,172N,4,0,01,004\n2073020,CESSNA,182R,4,0,01,004\n"
+        "1150020,CIRRUS DESIGN CORP,SR22,4,0,01,004\n9999999,BEECH,58,5,0,02,006\n")
+    (tmp_path / "faa_engines.csv").write_text(
+        "code,mfr,model,hp\n17026,LYCOMING,0-320 SERIES,00180\n41525,CONT MOTOR,O-470 SERIES,00230\n"
+        "41540,CONT MOTOR,IO-550-N,00310\n")
+    monkeypatch.setattr(R, "DATA_DIR", tmp_path)
+    for fn in (R._models, R._engines, R.lookup):
+        fn.cache_clear()
+    yield R
+    for fn in (R._models, R._engines, R.lookup):
+        fn.cache_clear()
+
+
+def test_tail_number_lookup_matches_the_catalog(fake_registry):
+    R = fake_registry
+    assert R.normalize_n(" n101-sp ") == "101SP"
+    r = R.lookup("n101sp")
+    assert r.n_number == "N101SP" and r.year == 1986 and r.type_id == "cessna-182/182R"
+    assert r.description == "1986 Cessna 182R with a Continental O-470 SERIES, 230 hp"
+    assert r.engine_note() is None
+    assert R.lookup("N99999") is None and R.lookup("") is None
+
+
+def test_tail_number_lookup_flags_engine_swaps_and_unknown_types(fake_registry):
+    R = fake_registry
+    conv = R.lookup("N1014F")
+    assert conv.type_id == "cessna-172/172N" and "180 hp" in conv.engine_note()
+    sr22 = R.lookup("N2RX")
+    assert sr22.type_id is None and sr22.make == "Cirrus"
+    twin = R.lookup("N77AB")
+    assert twin.multi_engine and twin.year is None and twin.type_id is None
+
+
+def test_registry_data_has_no_owner_columns():
+    import gzip as _gz
+    from flightplanner.config import DATA_DIR
+    with _gz.open(DATA_DIR / "faa_aircraft.csv.gz", "rt") as f:
+        assert f.readline().strip() == "n_number,year,model_code,engine_code"
+
+def test_can_i_fly_today_tomorrow_weekend(db, ac, mins):
+    from zoneinfo import ZoneInfo
+    from flightplanner.weekend import NODATA, ask_days, can_i_fly
+    assert ask_days(date(2026, 10, 22)) == [date(2026, 10, 22), date(2026, 10, 23), date(2026, 10, 24),
+                                            date(2026, 10, 25)]                       # Thu: + Fri, Sat, Sun
+    assert ask_days(date(2026, 10, 24)) == [date(2026, 10, 24), date(2026, 10, 25)]  # Sat: today + Sun
+    assert ask_days(date(2026, 10, 26))[:2] == [date(2026, 10, 26), date(2026, 10, 27)]
+    assert len(ask_days(date(2026, 10, 26))) == 5                                    # Mon: + Fri, Sat, Sun
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)[:1]
+    ctx = _ctx(db, ac, mins, plans)
+    zone = ZoneInfo(ctx.tz)
+    day = ctx.local(ctx.now).date() + timedelta(days=1)
+    morning = datetime(day.year, day.month, day.day, 9, tzinfo=zone).astimezone(timezone.utc)
+    evening = datetime(day.year, day.month, day.day, 20, tzinfo=zone).astimezone(timezone.utc)
+    ans = can_i_fly(ctx.forecast, db.get("KLEX"), mins, ctx.tz, morning)
+    assert [lbl for lbl, _ in ans][:2] == ["Today", "Tomorrow"]
+    assert ans[0][1].verdict != NODATA and all(a.reason for _, a in ans)
+    late = can_i_fly(ctx.forecast, db.get("KLEX"), mins, ctx.tz, evening)
+    assert late[0][1].verdict == NODATA and "daylight" in late[0][1].reason
+
+def test_airports_are_nationwide_with_time_zones(db):
+    assert len(db.airports) > 4000
+    assert db.get("KLEX").tz == "America/New_York"
+    assert db.get("KBWG").tz == "America/Chicago"          # Bowling Green KY is Central
+    assert db.get("KPHX").tz == "America/Phoenix"          # no daylight saving time
+    assert db.get("KBOI").state == "ID" and db.get("KBOI").runways
+    with pytest.raises(KeyError, match="US public airports"):
+        db.get("KZZZ")

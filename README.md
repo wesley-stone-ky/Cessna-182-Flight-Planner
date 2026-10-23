@@ -150,6 +150,20 @@ latest weight & balance record, then set `empty_is_example: false`. Limits come 
 (Model 182R); check the station arms against POH Section 6. The ⚖️ Load section in the sidebar (phone:
 in ⚙️ settings) checks weight, CG and baggage limits, and the planner only takes the fuel your load allows.
 
+## Aircraft types and tail numbers
+
+`config/aircraft_types/` is a catalog of aircraft families (Cessna 172 and 182, Piper PA-28 so far).
+Each file has shared `base` numbers and `variants` (182P, 182Q, 182R…) that override only what differs.
+These are **typical** planning numbers, marked `verified: false` until checked against a real POH.
+
+`config/aircraft.yaml` is *your* airplane: `type: cessna-182/182R` plus anything you know better than
+the catalog (usable fuel, empty weight, your real cruise speed and fuel burn). Your numbers always win.
+
+In the sidebar, type any tail number. The app looks it up in a trimmed copy of the FAA aircraft
+registry (year, make, model and engine only, no owner data), picks the matching type, and warns when
+the registered engine isn't the stock one. Refresh the registry copy with
+`python scripts/build_faa_registry.py`.
+
 `config/minimums.yaml` holds your personal minimums. Everything in it can also be adjusted from the
 sidebar.
 
@@ -160,7 +174,8 @@ sidebar.
 ```
 app.py                     Streamlit UI
 flightplanner/
-  aircraft.py              performance model (climb/cruise/descent from YAML)
+  aircraft.py              type catalog + performance model (climb/cruise/descent)
+  registry.py              FAA tail-number lookup → catalog type
   airports.py              bundled airport + runway DB, fuel-stop search, favorites
   geo.py                   great circle, wind triangle, magnetic variation (WMM)
   terrain.py               corridor terrain (AWS Terrain Tiles, cached)
@@ -171,9 +186,11 @@ flightplanner/
   planner.py               routes, leg simulation, go/no-go screening, day search
   export.py                .fpl / .gfp / CSV / text brief
   demo.py                  synthetic forecast (offline demo + tests)
-config/aircraft.yaml       YOUR airplane's numbers
+config/aircraft_types/     aircraft family catalog (typical numbers)
+config/aircraft.yaml       YOUR airplane: type + your own numbers
 config/minimums.yaml       YOUR personal minimums
 data/airports.csv          OurAirports extract (public domain)
+data/faa_*.csv(.gz)       FAA registry extract (public; no owner data)
 scripts/build_airport_data.py   refresh the airport extract
 scripts/weekend_email.py  send the weekend email (GitHub Actions: .github/workflows/weekend-email.yml)
 tests/                     offline pytest suite
@@ -188,6 +205,7 @@ Refresh the airport data occasionally with `python scripts/build_airport_data.py
   https://registry.opendata.aws/terrain-tiles/
 - Aviation Weather Center Data API: https://aviationweather.gov/data/api/
 - OurAirports (public domain): https://ourairports.com/data/
+- FAA Releasable Aircraft Database: https://registry.faa.gov/database/ReleasableAircraft.zip
 - 14 CFR 91.151 (VFR fuel), 91.155 (VFR weather minimums), 91.159 (VFR cruising altitudes),
   91.167 (IFR fuel), 91.103 (preflight action)
 - FAA Personal Minimums Checklist (PAVE):
