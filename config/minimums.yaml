@@ -9,9 +9,11 @@ flight_rules: VFR            # VFR now; IFR mode is there for when you're curren
 # --- Airports (departure, destination, fuel stops) ---
 airport_min_ceiling_ft_agl: 3000   # reg floor in Class C/D/E surface area: 1000 ft (91.155)
 airport_min_vis_sm: 5              # reg floor: 3 sm
-max_crosswind_kt: 12               # personal; POH demonstrated is 15 kt
+max_crosswind_kt: 12               # personal; POH demonstrated is 15 kt. Checked against the GUST value.
 max_gust_kt: 25
 max_surface_wind_kt: 25
+max_gust_spread_kt: 15             # gust minus sustained wind; big spreads mean wind shear on final
+wind_window_minutes: 60            # check the worst wind from 1 h before to 1 h after each ETA
 
 # --- En route ---
 enroute_min_vis_sm: 5

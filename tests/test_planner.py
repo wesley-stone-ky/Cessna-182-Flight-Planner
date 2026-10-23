@@ -435,3 +435,71 @@ def test_outlook_explains_itself_and_does_not_fail_partial_days(db, ac, mins):
     rt = route_outlook(fc, plans[0].legs, mins, days=7)
     bad = [r for r in rt if r["verdict"] == "Poor"]
     assert bad and any("near K" in line for line in bad[0]["reasons"])
+
+
+# --- airport surface wind -----------------------------------------------------
+def _taf_ctx(db, ac, mins, ident, periods, now):
+    ap = db.get(ident)
+    fc = synthetic_forecast([(ap.lat, ap.lon)], start=now - timedelta(hours=3), days=1)
+    return Context(ac, mins, fc, db, tafs={ident: {"station": ident, "periods": periods}}, now=now)
+
+
+def _per(now, h0, h1, wdir, kt, gust=None, change=""):
+    from flightplanner.weather import TafPeriod
+    return TafPeriod(now + timedelta(hours=h0), now + timedelta(hours=h1), change, wdir, kt, gust, 10.0, None, "")
+
+
+def _airport_findings(ctx, ident, when):
+    from flightplanner.planner import _airport_wx, _check_airport
+    aw = _airport_wx(ctx, ctx.db.get(ident), when)
+    out = []
+    _check_airport(ctx, aw, 0, "arrival", out)
+    return aw, out
+
+
+def test_variable_wind_counts_as_full_crosswind(db, ac, mins):
+    now = datetime(2026, 6, 1, 15, tzinfo=timezone.utc)
+    ctx = _taf_ctx(db, ac, mins, "KLEX", [_per(now, -3, 3, None, 14)], now)
+    aw, out = _airport_findings(ctx, "KLEX", now)
+    assert aw.crosswind_kt == 14
+    assert any(f.kind == "xwind" and f.level == "CAUTION" for f in out)
+
+
+def test_crosswind_uses_gust(db, ac, mins):
+    # 180@8G20 at KLEX: rwy 22 sustained crosswind ~5 kt, but ~13 kt with the gust
+    now = datetime(2026, 6, 1, 15, tzinfo=timezone.utc)
+    ctx = _taf_ctx(db, ac, mins, "KLEX", [_per(now, -3, 3, 180, 8, 20)], now)
+    aw, out = _airport_findings(ctx, "KLEX", now)
+    assert aw.best_runway == "22" and 12 < aw.crosswind_kt < 15
+    assert any(f.kind == "xwind" for f in out)
+
+
+def test_wind_shift_after_eta_is_caught(db, ac, mins):
+    now = datetime(2026, 6, 1, 15, tzinfo=timezone.utc)
+    periods = [_per(now, -3, 0.75, 40, 5), _per(now, 0.75, 4, 40, 25, 35, "FM")]
+    ctx = _taf_ctx(db, ac, mins, "KLEX", periods, now)
+    aw, out = _airport_findings(ctx, "KLEX", now)
+    assert aw.gust_kt == 35
+    assert any(f.kind == "wind" and f.level == "NO-GO" for f in out)
+
+
+def test_tempo_wind_and_gust_spread(db, ac, mins):
+    now = datetime(2026, 6, 1, 15, tzinfo=timezone.utc)
+    periods = [_per(now, -3, 3, 40, 5), _per(now, -1, 2, 40, 8, 23, "TEMPO")]
+    ctx = _taf_ctx(db, ac, mins, "KLEX", periods, now)
+    aw, out = _airport_findings(ctx, "KLEX", now)
+    assert aw.gust_spread_kt == 15
+    assert any("above the sustained" in f.text for f in out)
+
+
+def test_missing_runway_data_is_flagged(db, ac, mins):
+    import dataclasses
+    from flightplanner.planner import _airport_wx, _check_airport
+    now = datetime(2026, 6, 1, 15, tzinfo=timezone.utc)
+    ctx = _taf_ctx(db, ac, mins, "KLEX", [_per(now, -3, 3, 270, 10)], now)
+    ap = dataclasses.replace(db.get("KLEX"), runways=())
+    aw = _airport_wx(ctx, ap, now)
+    out = []
+    _check_airport(ctx, aw, 0, "arrival", out)
+    assert aw.crosswind_kt is None
+    assert any("crosswind not checked" in f.text for f in out)
