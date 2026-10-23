@@ -121,6 +121,7 @@ def test_good_day_vs_frontal_day(db, ac, mins):
 
 
 def test_late_departure_hits_sunset(db, ac, mins):
+    mins = load_minimums({"day_only": True})
     plans = candidate_plans(db, db.get("KLEX"), db.get("KSPG"), ac, mins)
     ctx = _ctx(db, ac, mins, plans)
     day = ctx.local(ctx.now).date() + timedelta(days=1)
@@ -262,6 +263,7 @@ def test_gairmet_string_coords_and_borrowed_taf(tmp_path, monkeypatch):
 
 
 def test_no_departing_after_dark(db, ac, mins):
+    mins = load_minimums({"day_only": True})
     plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)
     ctx = _ctx(db, ac, mins, plans)
     day = ctx.local(ctx.now).date() + timedelta(days=1)
@@ -792,3 +794,46 @@ def test_airports_are_nationwide_with_time_zones(db):
     assert db.get("KBOI").state == "ID" and db.get("KBOI").runways
     with pytest.raises(KeyError, match="US public airports"):
         db.get("KZZZ")
+
+
+
+# --- day / night toggle ---------------------------------------------------------
+def _evening_plan(db, ac, mins, dest, hour):
+    plans = candidate_plans(db, db.get("KLEX"), db.get(dest), ac, mins)
+    ctx = _ctx(db, ac, mins, plans)
+    day = ctx.local(ctx.now).date() + timedelta(days=1)
+    from zoneinfo import ZoneInfo
+    dep = datetime(day.year, day.month, day.day, hour, 0, tzinfo=ZoneInfo(ctx.tz)).astimezone(timezone.utc)
+    return ctx, evaluate_plan(ctx, plans[0], dep)
+
+
+def test_night_allowed_is_not_a_no_go(db, ac):
+    mins = load_minimums({"day_only": False, "night_current": True})
+    ctx, r = _evening_plan(db, ac, mins, "KGGE", 18)
+    assert not any(f.kind == "night" for f in r.findings)
+    assert any(f.kind == "night-info" for f in r.findings)
+    assert not any(f.kind == "night-currency" for f in r.findings)
+
+
+def test_night_without_currency_is_flagged(db, ac):
+    mins = load_minimums({"day_only": False, "night_current": False})
+    ctx, r = _evening_plan(db, ac, mins, "KGGE", 19)
+    assert any(f.kind == "night-currency" and "61.57" in f.text for f in r.findings)
+
+
+def test_night_over_the_mountains_is_cautioned(db, ac):
+    mins = load_minimums({"day_only": False, "night_current": True})
+    ctx, r = _evening_plan(db, ac, mins, "KGGE", 20)    # KLEX-KGGE crosses the Appalachians
+    assert any(f.kind == "night-terrain" and f.level == "CAUTION" for f in r.findings)
+
+
+def test_night_reserve_is_at_least_45_minutes(db, ac):
+    from flightplanner.planner import _is_night
+    mins = load_minimums({"day_only": False, "night_current": True, "reserve_minutes": 30})
+    ctx, r = _evening_plan(db, ac, mins, "KGGE", 20)
+    lr = r.legs[-1]
+    assert _is_night(ctx, lr.leg.arr, lr.arr_time)
+    assert lr.reserve_required_gal == pytest.approx(45 / 60 * ac.cruise_gph, rel=0.01)
+    day_mins = load_minimums({"day_only": False, "night_current": True, "reserve_minutes": 30})
+    ctx2, r2 = _evening_plan(db, ac, day_mins, "KGGE", 9)              # same rules, daytime
+    assert r2.legs[-1].reserve_required_gal == pytest.approx(30 / 60 * ac.cruise_gph, rel=0.01)

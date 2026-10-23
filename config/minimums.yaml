@@ -34,9 +34,15 @@ max_leg_hours: 3.5                   # sitting / fatigue limit per leg
 planning_headwind_kt: 10             # used only to choose stop candidates
 fuel_stop_ground_minutes: 45         # fuel, bathroom, stretch
 
-# --- Daylight ---
-day_only: true
-sunset_buffer_minutes: 30            # be on the ground 30 min before sunset
+# --- Day / night ---
+# day_only: true  -> plan only flights that land before dark (with the buffer below).
+# day_only: false -> night flights are fine; the planner then applies the night rules:
+#   45-min minimum reserve at night (14 CFR 91.151), night currency to carry passengers
+#   (61.57(b): 3 full-stop landings, 1 h after sunset to 1 h before sunrise, last 90 days),
+#   and a caution for night legs over mountainous terrain.
+day_only: false
+sunset_buffer_minutes: 30            # day-only mode: be on the ground 30 min before sunset
+night_current: false                 # set true when you have the 61.57(b) night landings
 
 # --- Fuel stops ---
 min_runway_ft: 3000

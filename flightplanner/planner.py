@@ -666,7 +666,9 @@ def evaluate_leg(ctx: Context, leg: Leg, li: int, dep_time: datetime, fuel_on_bo
     _check_airport(ctx, dep_wx, li, "departure", findings)
     _check_airport(ctx, arr_wx, li, "arrival", findings)
 
-    # Daylight
+    # Day / night
+    if not m.day_only:
+        _night_checks(ctx, leg, li, dep_time, arr_time, sim, findings)
     if m.day_only:
         rise, dep_sset = sun_times(leg.dep.lat, leg.dep.lon, dep_time, ctx.tz)
         arr_rise, sset = sun_times(leg.arr.lat, leg.arr.lon, arr_time, ctx.tz)
@@ -690,12 +692,16 @@ def evaluate_leg(ctx: Context, leg: Leg, li: int, dep_time: datetime, fuel_on_bo
             if level == NOGO:
                 findings.append(Finding(NOGO, li, leg.dep.ident, f"Weight & balance: {text}", "wb"))
 
-    # Fuel and fatigue
-    reserve = m.reserve_minutes / 60 * ac.cruise_gph
+    # Fuel and fatigue (91.151: 45 min minimum when the leg ends at night)
+    reserve_min = m.reserve_minutes
+    if not m.day_only and _is_night(ctx, leg.arr, arr_time):
+        reserve_min = max(reserve_min, 45)
+    reserve = reserve_min / 60 * ac.cruise_gph
     landing = fuel_on_board - sim["fuel"]
     if landing < reserve:
         findings.append(Finding(NOGO, li, leg.arr.ident, f"Lands {leg.arr.ident} with {landing:.1f} gal; your "
-                                f"{m.reserve_minutes:.0f}-min reserve needs {reserve:.1f} gal", "fuel"))
+                                f"{reserve_min:.0f}-min reserve needs {reserve:.1f} gal"
+                                + (" (night minimum)" if reserve_min > m.reserve_minutes else ""), "fuel"))
     elif landing < reserve + 4:
         findings.append(Finding(CAUTION, li, leg.arr.ident, f"Thin fuel margin into {leg.arr.ident}: "
                                 f"{landing:.1f} gal on landing", "fuel"))
@@ -834,3 +840,47 @@ def route_weather_rows(ctx: Context, r: PlanResult) -> list[dict]:
                 "Temp @ alt": "—" if t_alt is None else f"{t_alt:.0f}°C",
             })
     return rows
+
+
+
+# ---------------------------------------------------------------------------
+# Night flying (used when the pilot allows night flights)
+# ---------------------------------------------------------------------------
+def _is_night(ctx: "Context", ap, when: datetime) -> bool:
+    """Between sunset and sunrise at `ap` (14 CFR 91.209 position-light period)."""
+    rise, sset = sun_times(ap.lat, ap.lon, when, ctx.tz)
+    return when < rise or when > sset
+
+
+def _in_currency_window(ctx: "Context", ap, when: datetime) -> bool:
+    """61.57(b): from 1 hour after sunset to 1 hour before sunrise."""
+    rise, sset = sun_times(ap.lat, ap.lon, when, ctx.tz)
+    return when < rise - timedelta(hours=1) or when > sset + timedelta(hours=1)
+
+
+def _night_checks(ctx: "Context", leg: "Leg", li: int, dep_time: datetime, arr_time: datetime,
+                  sim: dict, findings: list) -> None:
+    m = ctx.mins
+    night_dep, night_arr = _is_night(ctx, leg.dep, dep_time), _is_night(ctx, leg.arr, arr_time)
+    if night_arr or night_dep:
+        _, sset = sun_times(leg.arr.lat, leg.arr.lon, arr_time, ctx.tz)
+        findings.append(Finding(INFO, li, leg.arr.ident, f"Night leg: lands {leg.arr.ident} at {ctx.fmt(arr_time)} "
+                                f"(sunset {ctx.fmt(sset)})", "night-info"))
+    if not m.night_current and (_in_currency_window(ctx, leg.dep, dep_time)
+                                or _in_currency_window(ctx, leg.arr, arr_time)):
+        findings.append(Finding(CAUTION, li, leg.arr.ident,
+                                f"Night takeoff/landing more than 1 h after sunset at {leg.arr.ident if night_arr else leg.dep.ident}: "
+                                "you need 3 full-stop night landings in the last 90 days to carry passengers "
+                                "(14 CFR 61.57(b)). Tick 'Night current' if you have them.", "night-currency"))
+    # Night over mountains: few lit places to put it down if the engine quits.
+    if leg.mountainous:
+        cs, ce = sim["cruise"]
+        dark = [d for (la, lo, d), eta in zip(leg.samples, sim["etas"])
+                if leg.max_terrain(d - WX_STEP_NM / 2, d + WX_STEP_NM / 2) > 3000
+                and _is_night(ctx, leg.dep if d < leg.dist_nm / 2 else leg.arr, eta)]
+        if dark:
+            findings.append(Finding(CAUTION, li, f"leg {leg.dep.ident}-{leg.arr.ident}",
+                                    f"Night over mountainous terrain (up to ~{leg.max_terrain():,.0f} ft) on "
+                                    f"{leg.dep.ident}-{leg.arr.ident}: few lit landing options if the engine "
+                                    "quits. Consider a higher altitude, a route around the ridges, or crossing "
+                                    "them in daylight.", "night-terrain"))

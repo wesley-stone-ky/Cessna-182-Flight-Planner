@@ -266,7 +266,18 @@ with settings_parent:
     xw = st.slider("Max crosswind (kt)", 5, 15, int(base_mins.max_crosswind_kt))
     reserve = st.select_slider("Fuel reserve (min)", [30, 45, 60, 75, 90], int(base_mins.reserve_minutes))
     max_leg = st.slider("Longest leg you want to sit (h)", 1.5, 5.0, float(base_mins.max_leg_hours), 0.5)
-    day_only = st.checkbox("Daylight only", base_mins.day_only)
+    night_choice = st.radio(
+        "Night flying", ["Day or night", "Land before dark"], horizontal=True,
+        index=1 if base_mins.day_only else 0,
+        help="'Day or night' plans night legs and applies the night rules (45-min reserve, night currency "
+             "for passengers, a caution for night legs over the mountains). 'Land before dark' only plans "
+             "flights that are on the ground before sunset.")
+    day_only = night_choice == "Land before dark"
+    night_current = False
+    if not day_only:
+        night_current = st.checkbox(
+            "Night current (3 full-stop night landings in 90 days)", base_mins.night_current,
+            help="Needed to carry passengers more than 1 h after sunset (14 CFR 61.57(b)).")
     ground = st.slider("Time on the ground at a fuel stop (min)", 20, 120, int(base_mins.fuel_stop_ground_minutes), 5)
 
     st.header("⚖️ Load")
@@ -336,7 +347,7 @@ ac = Aircraft.load(cruise_setting=setting, overrides={"fuel.usable_gal": round(p
 mins = load_minimums({
     "flight_rules": rules, "airport_min_ceiling_ft_agl": cig, "airport_min_vis_sm": vis,
     "max_crosswind_kt": xw, "reserve_minutes": reserve, "max_leg_hours": max_leg,
-    "day_only": day_only, "fuel_stop_ground_minutes": ground,
+    "day_only": day_only, "night_current": night_current, "fuel_stop_ground_minutes": ground,
 })
 db = get_db()
 
@@ -352,7 +363,7 @@ def get_plans(dep_ident: str, dest_ident: str, settings_key: tuple):
 
 def plans_for(dep_ident: str, dest_ident: str):
     key = (type_id, my_ktas, round(my_gph, 1), round(plan_fuel, 1), setting, reserve, max_leg, rules, cig, vis, xw,
-           day_only)
+           day_only, night_current)
     return get_plans(dep_ident, dest_ident, key)
 
 
@@ -699,7 +710,7 @@ with tab_plan:
         window = st.date_input("Days you could leave", (today + timedelta(days=1), today + timedelta(days=6)),
                                min_value=today, max_value=today + timedelta(days=6), format="MM/DD/YYYY")
     with c4:
-        hours = st.slider("Departure window (local time)", 5, 19, (8, 13), format="%d:00")
+        hours = st.slider("Departure window (local time)", 5, 22 if not day_only else 19, (8, 13), format="%d:00")
     ret = st.checkbox("Plan the trip home too")
     if ret:
         c5, c6 = st.columns([2, 2])
@@ -709,7 +720,8 @@ with tab_plan:
                                        min_value=today, max_value=today + timedelta(days=6),
                                        format="MM/DD/YYYY", key="retwin")
         with c6:
-            ret_hours = st.slider("Return departure window", 5, 19, (9, 14), format="%d:00", key="rethrs")
+            ret_hours = st.slider("Return departure window", 5, 22 if not day_only else 19, (9, 14), format="%d:00",
+                              key="rethrs")
 
     if st.button("Find the best days", type="primary", width="stretch", disabled=not valid_pair):
         try:
