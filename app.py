@@ -33,7 +33,7 @@ def _reload_stale_modules() -> None:
         pkg._source_stamp = stamp
         return
     for name in ("config", "geo", "sun", "airports", "aircraft", "weather", "nws", "terrain",
-                 "planner", "outlook", "export", "livemap", "demo"):
+                 "planner", "outlook", "weekend", "export", "livemap", "demo"):
         mod = sys.modules.get(f"flightplanner.{name}")
         if mod is not None:
             importlib.reload(mod)
@@ -65,6 +65,7 @@ from flightplanner.planner import (NOGO, CAUTION, Context, attach_terrain, candi
 from flightplanner.terrain import Terrain
 from flightplanner.weather import AviationWeather, decode_metar, fetch_forecast
 from flightplanner.wb import Loading, WeightBalance
+from flightplanner.weekend import GO, MARGINAL, NOGO, can_i_fly
 
 st.set_page_config(page_title="C182 Planner", page_icon="✈️", layout="wide")
 
@@ -301,7 +302,10 @@ def plans_for(dep_ident: str, dest_ident: str):
 
 
 def forecast_for(plans):
-    pts = forecast_points(plans) + [(a.lat, a.lon) for p in plans for a in p.airports]
+    return forecast_at(forecast_points(plans) + [(a.lat, a.lon) for p in plans for a in p.airports])
+
+
+def forecast_at(pts):
     now = datetime.now(timezone.utc)
     if demo:
         note_source("Weather forecast", True, "DEMO data")
@@ -376,9 +380,9 @@ except KeyError as e:
     st.error(str(e).strip('"'))
     valid_pair = False
 
-tab_plan, tab_outlook, tab_live = st.tabs(
-    ["🗓️ Plan", "🌤️ Outlook", "🛫 Go / no-go"] if PHONE else
-    ["🗓️ Trip planner", "🌤️ 7-day outlook", "🛫 Before you go (live)"])
+tab_fly, tab_plan, tab_outlook, tab_live = st.tabs(
+    ["✅ Fly?", "🗓️ Plan", "🌤️ Outlook", "🛫 Go / no-go"] if PHONE else
+    ["✅ Can I fly?", "🗓️ Trip planner", "🌤️ 7-day outlook", "🛫 Before you go (live)"])
 
 
 def metric_grid(items: list[tuple[str, str]]) -> None:
@@ -601,6 +605,35 @@ def show_direction(title: str, res: dict, key: str):
                 "Why": " · ".join(h.top_reasons(1)) or "—"} for h in d.by_hour]),
                 hide_index=True, width="stretch")
 
+
+FLY_ICON = {GO: "🟢 GO", MARGINAL: "🟡 MARGINAL", NOGO: "🔴 NO-GO"}
+
+with tab_fly:
+    st.caption("Today, tomorrow and the weekend at your airports, checked hour by hour against your airport "
+               "minimums (ceiling, visibility, wind, gusts, storms; daylight only). Same answer as the weekend email.")
+    if valid_pair:
+        try:
+            aps = [db.get(dep_id)] + ([db.get(dest_id)] if dest_id != dep_id else [])
+            fc = forecast_at([(a.lat, a.lon) for a in aps])
+            now = datetime.now(timezone.utc)
+            for ap in aps:
+                st.subheader(f"{ap.ident} — {ap.name}")
+                answers = can_i_fly(fc, ap, mins, TZ, now)
+                cols = [st.container(border=True) for _ in answers] if PHONE else \
+                    [c.container(border=True) for c in st.columns(len(answers))]
+                for col, (label, a) in zip(cols, answers):
+                    with col:
+                        st.markdown(f"**{label}** · {a.day:%a %b %-d}")
+                        st.markdown(f"### {FLY_ICON.get(a.verdict, '⚪ ' + a.verdict)}")
+                        if a.window != "—":
+                            st.markdown(f"Best **{a.window}**")
+                        st.caption(a.reason)
+            st.caption(f"Your minimums: ceiling {mins.airport_min_ceiling_ft_agl:,.0f} ft, visibility "
+                       f"{mins.airport_min_vis_sm:.0f} sm, wind {mins.max_surface_wind_kt:.0f} kt, gusts "
+                       f"{mins.max_gust_kt:.0f} kt. Forecast: National Weather Service 7-day grid. For today, also "
+                       "check METARs and TAFs on the Before you go tab.")
+        except Exception as e:
+            st.error(f"Couldn't get the forecast: {friendly(e)}")
 
 with tab_plan:
     st.caption("Pick your travel window. The planner tries every departure time and route option against the "

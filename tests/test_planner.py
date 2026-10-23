@@ -627,3 +627,24 @@ def test_weekend_email_says_no_data_past_the_forecast(db, ac, mins):
     far = ctx.local(ctx.now).date() + timedelta(days=20)
     wk = weekend_for(ctx.forecast, db.get("KLEX"), mins, ctx.tz, far)
     assert all(d.verdict == NODATA for d in wk.days)
+
+
+def test_can_i_fly_today_tomorrow_weekend(db, ac, mins):
+    from zoneinfo import ZoneInfo
+    from flightplanner.weekend import NODATA, ask_days, can_i_fly
+    assert ask_days(date(2026, 10, 22)) == [date(2026, 10, 22), date(2026, 10, 23), date(2026, 10, 24),
+                                            date(2026, 10, 25)]                       # Thu: + Fri, Sat, Sun
+    assert ask_days(date(2026, 10, 24)) == [date(2026, 10, 24), date(2026, 10, 25)]  # Sat: today + Sun
+    assert ask_days(date(2026, 10, 26))[:2] == [date(2026, 10, 26), date(2026, 10, 27)]
+    assert len(ask_days(date(2026, 10, 26))) == 5                                    # Mon: + Fri, Sat, Sun
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)[:1]
+    ctx = _ctx(db, ac, mins, plans)
+    zone = ZoneInfo(ctx.tz)
+    day = ctx.local(ctx.now).date() + timedelta(days=1)
+    morning = datetime(day.year, day.month, day.day, 9, tzinfo=zone).astimezone(timezone.utc)
+    evening = datetime(day.year, day.month, day.day, 20, tzinfo=zone).astimezone(timezone.utc)
+    ans = can_i_fly(ctx.forecast, db.get("KLEX"), mins, ctx.tz, morning)
+    assert [lbl for lbl, _ in ans][:2] == ["Today", "Tomorrow"]
+    assert ans[0][1].verdict != NODATA and all(a.reason for _, a in ans)
+    late = can_i_fly(ctx.forecast, db.get("KLEX"), mins, ctx.tz, evening)
+    assert late[0][1].verdict == NODATA and "daylight" in late[0][1].reason

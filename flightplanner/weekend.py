@@ -1,4 +1,4 @@
-"""The weekend email: "Can I fly this weekend?" for a pilot's home airport(s).
+"""Can I fly? Today / tomorrow / weekend answers, and the weekend email.
 
 Builds on outlook.airport_outlook (NWS 7-day grid, checked hour by hour against
 the pilot's airport minimums) and turns each weekend day into GO / MARGINAL /
@@ -7,12 +7,13 @@ NO-GO with the best time window and the main reason.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from html import escape
+from zoneinfo import ZoneInfo
 
 from .airports import Airport
 from .config import Minimums
-from .outlook import DayOutlook, airport_outlook
+from .outlook import DayOutlook, _windows, airport_outlook, explain_hours
 from .weather import GridForecast
 
 GO, MARGINAL, NOGO, NODATA = "GO", "MARGINAL", "NO-GO", "NO DATA"
@@ -69,6 +70,44 @@ def weekend_for(fc: GridForecast, ap: Airport, mins: Minimums, tz: str, today: d
             continue
         days.append(WeekendDay(d, VERDICT.get(o.verdict, NODATA), o.best_window, _reason(o)))
     return AirportWeekend(ap, days)
+
+
+def ask_days(today: date) -> list[date]:
+    """Today, tomorrow, and the rest of the coming weekend (within the 7-day forecast)."""
+    days = [today, today + timedelta(days=1)]
+    days += [d for d in weekend_days(today) if d not in days and (d - today).days <= 6]
+    return days
+
+
+def _rest_of_today(o: DayOutlook, now: datetime, mins: Minimums) -> WeekendDay:
+    """Judge only the daylight hours still ahead."""
+    hrs = [h for h in o.hours if h.time + timedelta(minutes=30) >= now]
+    if len(hrs) < 2:
+        return WeekendDay(o.day, NODATA, "—", "Not enough daylight left today.")
+    ok = sum(h.ok for h in hrs)
+    frac = ok / len(hrs)
+    verdict = GO if frac >= 0.6 and ok >= min(3, len(hrs)) else MARGINAL if frac >= 0.3 else NOGO
+    problems = explain_hours(hrs, len(hrs), mins)
+    reason = problems[0].split(" — ")[0] if problems else "Every daylight hour left today meets your airport minimums."
+    return WeekendDay(o.day, verdict, _windows([(h.time, h.ok) for h in hrs]), reason)
+
+
+def can_i_fly(fc: GridForecast, ap: Airport, mins: Minimums, tz: str, now: datetime) -> list[tuple[str, WeekendDay]]:
+    """[(label, answer)] for today, tomorrow and the weekend at one airport."""
+    today = now.astimezone(ZoneInfo(tz)).date()
+    want = ask_days(today)
+    outs = {o.day: o for o in airport_outlook(fc, ap, mins, tz, days=(want[-1] - today).days + 1, start=today)}
+    res = []
+    for d in want:
+        label = "Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else f"{d:%A}"
+        o = outs.get(d)
+        if o is None:
+            res.append((label, WeekendDay(d, NODATA, "—", "Past the end of the 7-day forecast.")))
+        elif d == today:
+            res.append((label, _rest_of_today(o, now, mins)))
+        else:
+            res.append((label, WeekendDay(d, VERDICT.get(o.verdict, NODATA), o.best_window, _reason(o))))
+    return res
 
 
 def subject(weekends: list[AirportWeekend]) -> str:
