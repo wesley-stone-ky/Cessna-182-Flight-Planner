@@ -1,0 +1,146 @@
+# ---------------------------------------------------------------------------
+# Piper PA-28 family: Cherokee, Warrior, Archer, Arrow
+# ---------------------------------------------------------------------------
+# TYPICAL planning numbers, deliberately on the slow / thirsty side of what
+# owners report. NOT a substitute for the airplane's POH/AFM; `verified:
+# false` makes the app say so. An owner's own numbers always win.
+# Fuel: the app uses the SMALLEST `fuel_options` entry until the owner
+# confirms their usable fuel. No weight & balance data yet for this family.
+# Not included: PA-28-235/236 Dakota, turbo Arrows (PA-28RT-201T).
+# ---------------------------------------------------------------------------
+family: piper-pa28
+make: Piper
+faa_mfr: "^PIPER"
+
+base:
+  verified: false
+  default_cruise_setting: "65%"
+  climb_ktas: 80
+  descent:
+    fpm: 500
+    gph: 6.5
+    ktas_bonus: 5
+  limits:
+    max_demonstrated_crosswind_kt: 17
+    service_ceiling_ft: 11000
+    max_planning_alt_ft: 10500
+  fuel:
+    start_taxi_takeoff_gal: 1.5
+  fuel_options:
+    standard: {total_gal: 50, usable_gal: 48}
+
+variants:
+  "PA-28-140":
+    name: Piper PA-28-140 Cherokee
+    years: [1964, 1977]
+    engine: Lycoming O-320-E2A, 150 hp
+    faa_models: ["PA-28-140", "PA-28-150", "PA-28-160"]
+    climb_ktas: 75
+    climb_table:
+      - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
+      - {alt_ft: 2000,  minutes: 4,  gal: 0.8, nm: 5}
+      - {alt_ft: 4000,  minutes: 8,  gal: 1.6, nm: 11}
+      - {alt_ft: 6000,  minutes: 13, gal: 2.6, nm: 18}
+      - {alt_ft: 8000,  minutes: 20, gal: 3.8, nm: 28}
+      - {alt_ft: 10000, minutes: 30, gal: 5.5, nm: 43}
+    cruise_settings:
+      "75%":
+        gph: 8.5
+        ktas: {2000: 106, 4000: 108, 6000: 110, 8000: 111}
+        max_alt_ft: 8000
+      "65%":
+        gph: 7.5
+        ktas: {2000: 100, 4000: 102, 6000: 104, 8000: 105, 10000: 105}
+        max_alt_ft: 10000
+      "55%":
+        gph: 6.5
+        ktas: {2000: 92, 4000: 94, 6000: 96, 8000: 97, 10000: 97}
+        max_alt_ft: 10000
+    limits: {service_ceiling_ft: 10950}
+
+  "PA-28-161":
+    name: Piper PA-28-161 Warrior II / III (and PA-28-151)
+    years: [1974, 2026]
+    engine: Lycoming O-320-D3G, 160 hp
+    faa_models: ["PA-28-151", "PA-28-161"]
+    climb_table:
+      - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
+      - {alt_ft: 2000,  minutes: 4,  gal: 0.8, nm: 5}
+      - {alt_ft: 4000,  minutes: 7,  gal: 1.5, nm: 10}
+      - {alt_ft: 6000,  minutes: 11, gal: 2.4, nm: 16}
+      - {alt_ft: 8000,  minutes: 16, gal: 3.4, nm: 23}
+      - {alt_ft: 10000, minutes: 23, gal: 4.7, nm: 33}
+    cruise_settings:
+      "75%":
+        gph: 8.5
+        ktas: {2000: 112, 4000: 114, 6000: 116, 8000: 117}
+        max_alt_ft: 8000
+      "65%":
+        gph: 7.5
+        ktas: {2000: 106, 4000: 108, 6000: 110, 8000: 111, 10000: 112}
+        max_alt_ft: 10000
+      "55%":
+        gph: 6.5
+        ktas: {2000: 98, 4000: 100, 6000: 102, 8000: 103, 10000: 104}
+        max_alt_ft: 10000
+
+  "PA-28-181":
+    name: Piper PA-28-180 Cherokee 180 / PA-28-181 Archer
+    years: [1963, 2026]
+    engine: Lycoming O-360-A, 180 hp
+    faa_models: ["PA-28-180", "PA-28-181"]
+    climb_table:
+      - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
+      - {alt_ft: 2000,  minutes: 3,  gal: 0.8, nm: 4}
+      - {alt_ft: 4000,  minutes: 6,  gal: 1.6, nm: 9}
+      - {alt_ft: 6000,  minutes: 9,  gal: 2.4, nm: 14}
+      - {alt_ft: 8000,  minutes: 13, gal: 3.3, nm: 20}
+      - {alt_ft: 10000, minutes: 19, gal: 4.5, nm: 29}
+      - {alt_ft: 12000, minutes: 27, gal: 6.0, nm: 41}
+    cruise_settings:
+      "75%":
+        gph: 10.0
+        ktas: {2000: 120, 4000: 122, 6000: 124, 8000: 126}
+        max_alt_ft: 8000
+      "65%":
+        gph: 8.8
+        ktas: {2000: 113, 4000: 115, 6000: 117, 8000: 119, 10000: 120}
+        max_alt_ft: 10000
+      "55%":
+        gph: 7.6
+        ktas: {2000: 104, 4000: 106, 6000: 108, 8000: 110, 10000: 111, 12000: 111}
+        max_alt_ft: 12000
+    limits: {service_ceiling_ft: 13000}
+
+  "PA-28R":
+    name: Piper PA-28R Arrow (200 / II / III / IV, non-turbo)
+    years: [1969, 2026]
+    engine: Lycoming IO-360-C1C6, 200 hp
+    faa_models: ["PA-28R-180", "PA-28R-200", "PA-28R-201", "PA-28RT-201"]
+    climb_ktas: 90
+    fuel_options:
+      standard: {total_gal: 50, usable_gal: 48}
+      arrow_iii_iv: {total_gal: 77, usable_gal: 72}
+    climb_table:
+      - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
+      - {alt_ft: 2000,  minutes: 3,  gal: 0.8, nm: 4}
+      - {alt_ft: 4000,  minutes: 5,  gal: 1.5, nm: 8}
+      - {alt_ft: 6000,  minutes: 8,  gal: 2.3, nm: 13}
+      - {alt_ft: 8000,  minutes: 11, gal: 3.1, nm: 18}
+      - {alt_ft: 10000, minutes: 15, gal: 4.1, nm: 25}
+      - {alt_ft: 12000, minutes: 21, gal: 5.4, nm: 35}
+    descent: {gph: 7.5}
+    cruise_settings:
+      "75%":
+        gph: 10.5
+        ktas: {2000: 133, 4000: 135, 6000: 137, 8000: 139}
+        max_alt_ft: 8000
+      "65%":
+        gph: 9.4
+        ktas: {2000: 126, 4000: 128, 6000: 130, 8000: 132, 10000: 133}
+        max_alt_ft: 10000
+      "55%":
+        gph: 8.2
+        ktas: {2000: 117, 4000: 119, 6000: 121, 8000: 123, 10000: 124, 12000: 124}
+        max_alt_ft: 12000
+    limits: {service_ceiling_ft: 16000}

@@ -1,4 +1,4 @@
-"""Weight & balance for the C182 (limits and arms from config/aircraft.yaml).
+"""Weight & balance (limits and arms from the aircraft type, empty weight from the owner).
 
 Checks takeoff and landing weight against the limits, the CG against the
 envelope at both points, baggage compartment limits, and works out how much
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .config import load_yaml
 
 
 @dataclass
@@ -59,7 +58,13 @@ def _interp(w: float, pts: list[list[float]]) -> float:
 
 class WeightBalance:
     def __init__(self, raw: dict | None = None, usable_gal: float | None = None):
-        cfg = load_yaml("aircraft.yaml") if raw is None else raw
+        """`raw` is a resolved aircraft profile (Aircraft.raw); default: config/aircraft.yaml."""
+        if raw is None:
+            from .aircraft import resolve
+            raw = resolve()
+        cfg = raw
+        if not cfg.get("weight_balance", {}).get("cg_envelope"):
+            raise ValueError("No weight & balance data for this aircraft type yet.")
         self.c = cfg["weight_balance"]
         self.usable_gal = float(usable_gal if usable_gal is not None else cfg["fuel"]["usable_gal"])
 

@@ -1,15 +1,16 @@
 # ---------------------------------------------------------------------------
-# Aircraft profile: 1985 Cessna 182R Skylane (Continental O-470-U, 230 hp)
+# My airplane: 1985 Cessna 182R Skylane (Continental O-470-U, 230 hp)
 # ---------------------------------------------------------------------------
-# These are PLANNING ESTIMATES assembled from Cessna 182Q/R handbook data
-# and typical owner-reported numbers. They are NOT a substitute for YOUR
-# airplane's Pilot's Operating Handbook (POH) / AFM.
+# `type` picks the catalog entry in config/aircraft_types/ (performance,
+# limits, CG envelope). Anything below overrides the catalog for THIS airplane.
 #
-# >>> Before relying on the app, open your POH and replace every value marked
-# >>> "VERIFY" with the number from your book (Section 2 Limitations for fuel,
-# >>> Section 5 Performance for climb/cruise). Then fly a couple of legs and
-# >>> tune cruise_ktas / gph to what your 750Xi and fuel totalizer actually show.
+# The catalog numbers are typical planning values, NOT a substitute for the
+# airplane's POH/AFM. To tune them, copy a block from the catalog file here
+# (e.g. cruise_settings or climb_table) and put in the numbers from your POH,
+# Section 5, or what your 750Xi and fuel totalizer actually show.
 # ---------------------------------------------------------------------------
+
+type: cessna-182/182R
 
 tail_number: "N____"          # your N-number (shows on exports)
 model: "Cessna 182R (1985)"
@@ -25,70 +26,10 @@ fuel:
   usable_gal: 75
   start_taxi_takeoff_gal: 2.0   # VERIFY: POH "fuel allowance for engine start, taxi and takeoff"
 
-# Time / fuel / distance to climb FROM SEA LEVEL, at max gross, standard day.
-# VERIFY against POH Section 5 "Time, Fuel and Distance to Climb".
-# App subtracts the departure-airport row so climbs from KLEX (979 ft) are shorter.
-climb_table:
-  - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
-  - {alt_ft: 2000,  minutes: 3,  gal: 1.0, nm: 5}
-  - {alt_ft: 4000,  minutes: 6,  gal: 2.0, nm: 11}
-  - {alt_ft: 6000,  minutes: 10, gal: 3.0, nm: 18}
-  - {alt_ft: 8000,  minutes: 15, gal: 4.3, nm: 27}
-  - {alt_ft: 10000, minutes: 21, gal: 5.7, nm: 39}
-  - {alt_ft: 12000, minutes: 29, gal: 7.4, nm: 55}
-
-descent:
-  fpm: 500                 # planned descent rate
-  gph: 9.0                 # fuel flow in cruise-descent (reduced power)
-  ktas_bonus: 5            # descents are a bit faster than cruise
-
-# Cruise performance (recommended lean, standard temp), KTAS by pressure altitude.
-# VERIFY against POH Section 5 cruise performance tables.
-cruise_settings:
-  "75%":
-    gph: 13.5
-    ktas: {2000: 134, 4000: 136, 6000: 138, 8000: 141}   # 75% not available much above 8000
-    max_alt_ft: 8000
-  "65%":
-    gph: 11.8
-    ktas: {2000: 126, 4000: 128, 6000: 131, 8000: 133, 10000: 135, 12000: 136}
-    max_alt_ft: 12000
-  "55%":
-    gph: 10.2
-    ktas: {2000: 115, 4000: 117, 6000: 120, 8000: 122, 10000: 124, 12000: 125}
-    max_alt_ft: 12500
-
-default_cruise_setting: "65%"
-
-limits:
-  max_demonstrated_crosswind_kt: 15   # C182 POH demonstrated crosswind (not a limitation)
-  service_ceiling_ft: 18100
-  max_planning_alt_ft: 10500           # no supplemental O2 planned (14 CFR 91.211)
-
-# ---------------------------------------------------------------------------
-# Weight & balance — 1985 C182R. Limits from FAA Type Certificate Data Sheet
-# 3A13 (Model 182R): max 3,100 lb takeoff, 2,950 lb landing; C.G. range
-# forward +33.0 in at 2,250 lb or less, straight line to +40.9 in at 3,100 lb;
-# aft +46.0 in at all weights. Datum: front face of the firewall.
-# Station arms are typical 182R POH Section 6 values.
-# >>> VERIFY every arm against YOUR POH Section 6 loading graph, and put in
-# >>> the airplane's actual empty weight and moment from its latest
-# >>> Weight & Balance record (it includes unusable fuel and full oil).
-# ---------------------------------------------------------------------------
+# Weight & balance: limits, arms and the CG envelope come from the catalog
+# (FAA TCDS 3A13, Model 182R). These two numbers are THIS airplane's, from its
+# latest Weight & Balance record (includes unusable fuel and full oil).
 weight_balance:
   empty_weight_lb: 1850        # EXAMPLE ONLY — replace with the airplane's W&B record
   empty_arm_in: 37.5           # EXAMPLE ONLY — empty CG (moment / weight)
   empty_is_example: true       # set to false once the two lines above are real
-  max_takeoff_lb: 3100
-  max_landing_lb: 2950
-  fuel_lb_per_gal: 6.0
-  fuel_arm_in: 46.5            # VERIFY (POH Section 6)
-  stations:
-    front_seats: {arm_in: 37.0}                     # pilot + front passenger (adjustable 32-50)
-    rear_seats:  {arm_in: 74.0}
-    baggage_a:   {arm_in: 97.0,  max_lb: 120}
-    baggage_b:   {arm_in: 116.0, max_lb: 80}
-  baggage_total_max_lb: 200
-  cg_envelope:
-    forward: [[2250, 33.0], [3100, 40.9]]          # (weight lb, arm in), straight line between
-    aft:     [[2250, 46.0], [3100, 46.0]]

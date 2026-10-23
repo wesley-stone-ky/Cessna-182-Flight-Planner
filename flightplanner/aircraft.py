@@ -1,10 +1,95 @@
-"""Aircraft performance model built from the POH-style YAML profile."""
+"""Aircraft performance model built from POH-style YAML.
+
+Numbers come from two places, merged in this order:
+
+1. The type catalog, config/aircraft_types/<family>.yaml: one file per family
+   (e.g. cessna-182) with shared `base` numbers and `variants` (182P, 182Q,
+   182R, ...) that override only what differs. Type ids look like
+   "cessna-182/182R".
+2. "My airplane", config/aircraft.yaml (or a per-user dict): `type:` plus the
+   owner's own numbers (tail number, confirmed fuel, empty weight, tune-ups),
+   which win over the catalog.
+"""
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
-from .config import load_yaml
+import yaml
+
+from .config import CONFIG_DIR, load_yaml
+
+TYPES_DIR = CONFIG_DIR / "aircraft_types"
+
+
+def deep_merge(base: dict, over: dict) -> dict:
+    """Copy of `base` with `over` merged in; nested dicts merge, everything else replaces."""
+    out = copy.deepcopy(base)
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = deep_merge(out[k], v)
+        else:
+            out[k] = copy.deepcopy(v)
+    return out
+
+
+@dataclass(frozen=True)
+class AircraftType:
+    id: str              # "cessna-182/182R"
+    family: str          # "cessna-182"
+    variant: str         # "182R"
+    name: str            # "Cessna 182R Skylane"
+    years: tuple[int, int]
+    raw: dict            # base + variant, ready to fly
+
+    @property
+    def verified(self) -> bool:
+        """True once the numbers have been checked against a real POH."""
+        return bool(self.raw.get("verified"))
+
+
+@lru_cache(maxsize=1)
+def catalog() -> dict[str, AircraftType]:
+    out: dict[str, AircraftType] = {}
+    for path in sorted(TYPES_DIR.glob("*.yaml")):
+        fam = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        family = fam["family"]
+        for vid, var in (fam.get("variants") or {}).items():
+            raw = deep_merge(fam.get("base") or {}, var)
+            raw.setdefault("make", fam.get("make", ""))
+            raw.setdefault("faa_mfr", fam.get("faa_mfr", ""))
+            tid = f"{family}/{vid}"
+            yrs = raw.get("years") or [0, 9999]
+            out[tid] = AircraftType(tid, family, str(vid), raw.get("name", tid), (int(yrs[0]), int(yrs[1])), raw)
+    return out
+
+
+def get_type(type_id: str) -> AircraftType:
+    try:
+        return catalog()[type_id]
+    except KeyError:
+        raise KeyError(f"Unknown aircraft type {type_id!r}. Known: {', '.join(sorted(catalog()))}") from None
+
+
+def resolve(profile: dict | None = None) -> dict:
+    """Catalog numbers for profile['type'] with the owner's own numbers on top."""
+    profile = load_yaml("aircraft.yaml") if profile is None else profile
+    tid = profile.get("type")
+    if not tid:
+        return copy.deepcopy(profile)          # an old-style, fully spelled-out profile
+    mine = {k: v for k, v in profile.items() if k != "type"}
+    raw = deep_merge(get_type(tid).raw, mine)
+    raw["type"] = tid
+    fuel = raw.get("fuel", {})
+    if "usable_gal" not in fuel:
+        # No owner-confirmed fuel: use the type's smallest tank option until they say otherwise.
+        opts = raw.get("fuel_options") or {}
+        pick = mine.get("fuel_option") or min(opts, key=lambda k: opts[k]["usable_gal"])
+        fuel.update(opts[pick])
+        raw["fuel"] = fuel
+    return raw
 
 
 def _interp(x: float, xs: list[float], ys: list[float]) -> float:
@@ -32,8 +117,10 @@ class Aircraft:
     cruise_setting: str
 
     @classmethod
-    def load(cls, cruise_setting: str | None = None, overrides: dict | None = None) -> "Aircraft":
-        raw = load_yaml("aircraft.yaml")
+    def load(cls, cruise_setting: str | None = None, overrides: dict | None = None,
+             profile: dict | None = None) -> "Aircraft":
+        """`profile` is a "my airplane" dict (default: config/aircraft.yaml); `overrides` take dotted keys."""
+        raw = resolve(profile)
         for k, v in (overrides or {}).items():
             # dotted keys like "fuel.usable_gal"
             node = raw
@@ -42,12 +129,35 @@ class Aircraft:
                 node = node.setdefault(p, {})
             node[parts[-1]] = v
         setting = cruise_setting or raw.get("default_cruise_setting", "65%")
+        if setting not in raw["cruise_settings"]:
+            setting = raw.get("default_cruise_setting", next(iter(raw["cruise_settings"])))
         return cls(raw=raw, cruise_setting=setting)
+
+    @classmethod
+    def from_type(cls, type_id: str, cruise_setting: str | None = None, **mine) -> "Aircraft":
+        """A catalog type with optional owner numbers, e.g. from_type("cessna-172/172N", tail_number="N12345")."""
+        return cls.load(cruise_setting, profile={"type": type_id, **mine})
 
     # -- basic properties --------------------------------------------------
     @property
     def name(self) -> str:
-        return f'{self.raw.get("tail_number", "")} {self.raw.get("model", "")}'.strip()
+        tail = self.raw.get("tail_number", "")
+        tail = "" if tail.strip("N_ ") == "" else tail
+        return f'{tail} {self.raw.get("model") or self.raw.get("name", "")}'.strip()
+
+    @property
+    def type_id(self) -> str:
+        return self.raw.get("type", "")
+
+    @property
+    def verified(self) -> bool:
+        """False while the performance numbers are typical values nobody has checked against a POH."""
+        return bool(self.raw.get("verified", True))
+
+    @property
+    def has_weight_balance(self) -> bool:
+        wb = self.raw.get("weight_balance") or {}
+        return bool(wb.get("cg_envelope") and wb.get("empty_weight_lb"))
 
     @property
     def usable_gal(self) -> float:
@@ -106,8 +216,8 @@ class Aircraft:
         return ClimbResult(minutes, gph * minutes / 60, speed * minutes / 60)
 
     def climb_speed_kt(self) -> float:
-        # rough average TAS in a cruise climb for a 182 (Vy ~ 80 KIAS -> ~90 KTAS avg)
-        return 90.0
+        # average TAS in a cruise climb (a 182 at Vy ~80 KIAS averages ~90 KTAS)
+        return float(self.raw.get("climb_ktas", 90.0))
 
     def still_air_leg(self, dist_nm: float, dep_elev: float, arr_elev: float,
                       alt_ft: float = 6500, headwind_kt: float = 0) -> tuple[float, float]:
