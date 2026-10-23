@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------
+# Personal minimums. Start conservative and loosen only with recent experience.
+# These follow the FAA "Personal Minimums Checklist" (PAVE) approach;
+# regulatory floors are noted next to each value.
+# ---------------------------------------------------------------------------
+
+flight_rules: VFR            # VFR now; IFR mode is there for when you're current again
+
+# --- Airports (departure, destination, fuel stops) ---
+airport_min_ceiling_ft_agl: 3000   # reg floor in Class C/D/E surface area: 1000 ft (91.155)
+airport_min_vis_sm: 5              # reg floor: 3 sm
+max_crosswind_kt: 12               # personal; POH demonstrated is 15 kt
+max_gust_kt: 25
+max_surface_wind_kt: 25
+
+# --- En route ---
+enroute_min_vis_sm: 5
+terrain_clearance_ft: 1000          # over flat terrain
+mountain_terrain_clearance_ft: 2000 # within the corridor when terrain > 3000 ft MSL
+cloud_clearance_below_ft: 500       # 91.155 Class E/G below 10,000 ft
+corridor_halfwidth_nm: 5            # terrain search either side of course
+
+# --- Convection / icing / turbulence ---
+cape_caution_jkg: 500
+cape_nogo_jkg: 1500
+precip_prob_caution_pct: 50
+mountain_wind_caution_kt: 35        # 850 hPa wind over ridges: mechanical turbulence / wave
+
+# --- Fuel & fatigue ---
+reserve_minutes: 60                  # reg: 30 min day VFR (91.151), 45 IFR (91.167)
+max_leg_hours: 3.5                   # sitting / fatigue limit per leg
+planning_headwind_kt: 10             # used only to choose stop candidates
+fuel_stop_ground_minutes: 45         # fuel, bathroom, stretch
+
+# --- Daylight ---
+day_only: true
+sunset_buffer_minutes: 30            # be on the ground 30 min before sunset
+
+# --- Fuel stops ---
+min_runway_ft: 3000
+prefer_known_fuel_stops: true
