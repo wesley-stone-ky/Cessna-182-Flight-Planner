@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# Aircraft profile: 1985 Cessna 182R Skylane (Continental O-470-U, 230 hp)
+# ---------------------------------------------------------------------------
+# These are PLANNING ESTIMATES assembled from Cessna 182Q/R handbook data
+# and typical owner-reported numbers. They are NOT a substitute for YOUR
+# airplane's Pilot's Operating Handbook (POH) / AFM.
+#
+# >>> Before relying on the app, open your POH and replace every value marked
+# >>> "VERIFY" with the number from your book (Section 2 Limitations for fuel,
+# >>> Section 5 Performance for climb/cruise). Then fly a couple of legs and
+# >>> tune cruise_ktas / gph to what your 750Xi and fuel totalizer actually show.
+# ---------------------------------------------------------------------------
+
+tail_number: "N____"          # your N-number (shows on exports)
+model: "Cessna 182R (1985)"
+avionics: "Garmin GTN 750Xi"
+equipment_suffix: "/G"         # GPS/WAAS - used when filing (verify with your ADS-B setup)
+
+fuel:
+  # Owner-confirmed: 79 gal TOTAL capacity. Cessna's ~80-gal-total 182 tanks
+  # carry 75 gal usable (5 gal unusable), so 75 is used here.
+  # VERIFY: the fuel selector placard ("BOTH - xx GAL") gives the exact usable
+  # number; change this line to match it.
+  total_gal: 79
+  usable_gal: 75
+  start_taxi_takeoff_gal: 2.0   # VERIFY: POH "fuel allowance for engine start, taxi and takeoff"
+
+# Time / fuel / distance to climb FROM SEA LEVEL, at max gross, standard day.
+# VERIFY against POH Section 5 "Time, Fuel and Distance to Climb".
+# App subtracts the departure-airport row so climbs from KLEX (979 ft) are shorter.
+climb_table:
+  - {alt_ft: 0,     minutes: 0,  gal: 0.0, nm: 0}
+  - {alt_ft: 2000,  minutes: 3,  gal: 1.0, nm: 5}
+  - {alt_ft: 4000,  minutes: 6,  gal: 2.0, nm: 11}
+  - {alt_ft: 6000,  minutes: 10, gal: 3.0, nm: 18}
+  - {alt_ft: 8000,  minutes: 15, gal: 4.3, nm: 27}
+  - {alt_ft: 10000, minutes: 21, gal: 5.7, nm: 39}
+  - {alt_ft: 12000, minutes: 29, gal: 7.4, nm: 55}
+
+descent:
+  fpm: 500                 # planned descent rate
+  gph: 9.0                 # fuel flow in cruise-descent (reduced power)
+  ktas_bonus: 5            # descents are a bit faster than cruise
+
+# Cruise performance (recommended lean, standard temp), KTAS by pressure altitude.
+# VERIFY against POH Section 5 cruise performance tables.
+cruise_settings:
+  "75%":
+    gph: 13.5
+    ktas: {2000: 134, 4000: 136, 6000: 138, 8000: 141}   # 75% not available much above 8000
+    max_alt_ft: 8000
+  "65%":
+    gph: 11.8
+    ktas: {2000: 126, 4000: 128, 6000: 131, 8000: 133, 10000: 135, 12000: 136}
+    max_alt_ft: 12000
+  "55%":
+    gph: 10.2
+    ktas: {2000: 115, 4000: 117, 6000: 120, 8000: 122, 10000: 124, 12000: 125}
+    max_alt_ft: 12500
+
+default_cruise_setting: "65%"
+
+limits:
+  max_demonstrated_crosswind_kt: 15   # C182 POH demonstrated crosswind (not a limitation)
+  service_ceiling_ft: 18100
+  max_planning_alt_ft: 10500           # no supplemental O2 planned (14 CFR 91.211)
