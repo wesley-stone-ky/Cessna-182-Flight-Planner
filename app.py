@@ -71,13 +71,13 @@ def _om_key() -> str | None:
         return os.environ.get("OPEN_METEO_API_KEY")
 
 
-@st.cache_data(ttl=1200, show_spinner=False)
+@st.cache_resource(ttl=1200, show_spinner=False)
 def get_model_forecast(points: tuple[tuple[float, float], ...]):
     # One shared forecast per route (all tabs), refreshed every 20 minutes.
     return fetch_model_forecast(points, days=10, ttl_s=1200, api_key=_om_key())
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_resource(ttl=300, show_spinner=False)
 def get_awc(airport_ids: tuple[str, ...], pirep_points: tuple[tuple[str, float], ...] = ()):
     """METARs/TAFs (borrowing the nearest station when an airport has none),
     advisories and PIREPs. Cached 5 minutes."""
@@ -141,7 +141,7 @@ mins = load_minimums({
 db = get_db()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=50)
 def get_plans(dep_ident: str, dest_ident: str, settings_key: tuple):
     dep, dest = db.get(dep_ident), db.get(dest_ident)
     plans = candidate_plans(db, dep, dest, ac, mins)[:4]   # nonstop (if possible) + best stop options
