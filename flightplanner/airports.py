@@ -9,7 +9,7 @@ from .config import DATA_DIR
 from .geo import cross_along_track, haversine_nm
 
 # Airports along the Ohio Valley -> Southeast corridors that are widely known to
-# sell 100LL. Fuel availability and hours change: ALWAYS confirm on AirNav or
+# sell 100LL (elsewhere in the US nothing is marked yet; fuel stops still work). Fuel availability and hours change: ALWAYS confirm on AirNav or
 # the Chart Supplement before counting on it.
 KNOWN_FUEL = {
     # Kentucky / Tennessee
@@ -62,6 +62,7 @@ class Airport:
     longest_rwy_ft: int
     lighted: bool
     runways: tuple[Runway, ...] = field(default_factory=tuple)
+    tz: str = "America/New_York"   # IANA time zone of the airport
 
     @property
     def known_fuel(self) -> bool:
@@ -98,7 +99,7 @@ class AirportDB:
                     lat=float(r["lat"]), lon=float(r["lon"]),
                     elev_ft=float(r["elev_ft"] or 0), region=r["region"], city=r["city"],
                     longest_rwy_ft=int(r["longest_rwy_ft"]), lighted=r["lighted"] == "1",
-                    runways=tuple(rws.get(ident, ())))
+                    runways=tuple(rws.get(ident, ())), tz=r.get("tz") or "America/New_York")
         return cls(out)
 
     def get(self, ident: str) -> Airport:
@@ -108,7 +109,7 @@ class AirportDB:
         if len(key) == 3 and "K" + key in self.airports:
             return self.airports["K" + key]
         raise KeyError(f"Airport {ident!r} not found in the bundled database "
-                       "(public airports with a paved runway >= 2,500 ft in the Southeast).")
+                       "(US public airports with a paved runway of 2,500 ft or more).")
 
     def search(self, text: str, limit: int = 15) -> list[Airport]:
         t = text.strip().lower()

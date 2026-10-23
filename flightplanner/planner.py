@@ -438,7 +438,7 @@ def _airport_wx(ctx: Context, ap: Airport, when: datetime) -> AirportWx | None:
         wx = ctx.forecast.at(ap.lat, ap.lon, when)
         if wx is None:
             return None
-        aw = AirportWx(ap.ident, when, "model est.", wx.ceiling_agl_ft(), wx.vis_sm,
+        aw = AirportWx(ap.ident, when, "NWS forecast" if wx.nws else "model est.", wx.ceiling_agl_ft(), wx.vis_sm,
                        wx.wind_dir, wx.wind_kt, wx.gust_kt,
                        wx.wx_text if wx.wcode >= 45 else "")
     _apply_worst_wind(ctx, ap, aw)

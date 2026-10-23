@@ -36,9 +36,6 @@ from flightplanner.config import load_minimums  # noqa: E402
 from flightplanner.weather import fetch_forecast  # noqa: E402
 from flightplanner.weekend import render_html, render_text, subject, weekend_for  # noqa: E402
 
-DEFAULT_TZ = "America/New_York"
-
-
 def load_subscribers() -> list[dict]:
     raw = os.environ.get("SUBSCRIBERS_JSON")
     if not raw:
@@ -52,10 +49,12 @@ def load_subscribers() -> list[dict]:
 
 
 def build(sub: dict, db: AirportDB, fc) -> EmailMessage:
-    tz = sub.get("tz", DEFAULT_TZ)
     mins = load_minimums(sub.get("minimums"))
-    today = datetime.now(ZoneInfo(tz)).date()
-    weekends = [weekend_for(fc, db.get(i), mins, tz, today) for i in sub["airports"]]
+    weekends = []
+    for i in sub["airports"]:
+        ap = db.get(i)
+        tz = sub.get("tz") or ap.tz      # each airport's own daylight hours unless the subscriber says otherwise
+        weekends.append(weekend_for(fc, ap, mins, tz, datetime.now(ZoneInfo(tz)).date()))
     msg = EmailMessage()
     msg["Subject"] = subject(weekends)
     msg["To"] = sub["email"]
