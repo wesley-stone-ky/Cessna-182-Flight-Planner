@@ -3,7 +3,7 @@
 Run locally:   streamlit run app.py
 Tabs:
   1. Trip planner      – which days/times/routes work in your travel window
-  2. 10-day outlook    – daily weather at each airport and along the route
+  2. 7-day outlook     – daily weather at each airport and along the route
   3. Before you go     – live METAR/TAF/radar/advisories/PIREPs + go/no-go right now
 """
 from __future__ import annotations
@@ -108,11 +108,8 @@ def judgement_note(day: date) -> str:
     if lead <= 2:
         return ("**How sure:** 0–2 days out. This is the NWS forecasters' grid, and inside ~30 hours the "
                 "Go / no-go tab adds TAFs. Fairly reliable.")
-    if lead <= 6:
-        return ("**How sure:** 3–6 days out. Good for the general picture (a front, a stormy afternoon), "
-                "but timing and ceilings often shift. Check again 2–3 days before.")
-    return ("**How sure:** a week or more out. This comes from one computer model with no forecaster review, and "
-            "ceilings are estimated. Treat it as a trend; a 'Poor' this far out often changes.")
+    return ("**How sure:** 3–6 days out. Good for the general picture (a front, a stormy afternoon), "
+            "but timing and ceilings often shift. Check again 2–3 days before.")
 
 
 def why_block(day: date, route_row: dict | None, ap_rows: list[tuple[str, object]], show_hours: bool = True) -> None:
@@ -162,20 +159,10 @@ def get_terrain() -> Terrain:
     return Terrain()
 
 
-def _om_key() -> str | None:
-    """Optional paid Open-Meteo key (Streamlit secret or env var OPEN_METEO_API_KEY)."""
-    import os
-    try:
-        return st.secrets.get("OPEN_METEO_API_KEY") or os.environ.get("OPEN_METEO_API_KEY")
-    except Exception:
-        return os.environ.get("OPEN_METEO_API_KEY")
-
-
 @st.cache_resource(ttl=1200, show_spinner=False)
 def get_model_forecast(points: tuple[tuple[float, float], ...]):
-    # One shared forecast per route (all tabs), refreshed every 20 minutes:
-    # NWS grids (primary, 7 days) + Open-Meteo (winds aloft, days 8-10) when reachable.
-    fc, status = fetch_forecast(points, days=10, ttl_s=1200, api_key=_om_key())
+    # One shared forecast per route (all tabs), refreshed every 20 minutes: NWS grids, 7 days.
+    fc, status = fetch_forecast(points, ttl_s=1200)
     return fc, {k: (v.ok, v.count, v.error) for k, v in status.items()}
 
 
@@ -318,7 +305,7 @@ def forecast_for(plans):
     now = datetime.now(timezone.utc)
     if demo:
         note_source("Weather forecast", True, "DEMO data")
-        return synthetic_forecast(pts, start=now - timedelta(hours=1), days=10)
+        return synthetic_forecast(pts, start=now - timedelta(hours=1), days=7)
     key = tuple(sorted({(round(a, 3), round(b, 3)) for a, b in pts}))
     try:
         fc, status = get_model_forecast(key)
@@ -391,7 +378,7 @@ except KeyError as e:
 
 tab_plan, tab_outlook, tab_live = st.tabs(
     ["🗓️ Plan", "🌤️ Outlook", "🛫 Go / no-go"] if PHONE else
-    ["🗓️ Trip planner", "🌤️ 10-day outlook", "🛫 Before you go (live)"])
+    ["🗓️ Trip planner", "🌤️ 7-day outlook", "🛫 Before you go (live)"])
 
 
 def metric_grid(items: list[tuple[str, str]]) -> None:
@@ -585,8 +572,9 @@ def show_direction(title: str, res: dict, key: str):
     st.subheader(title)
     for n in res["notes"]:
         st.caption(f"ℹ️ {n}")
-    st.caption("Weather used: model forecast (Open-Meteo, NOAA GFS/HRRR and others) for every hour and point; "
-               "TAFs and AIRMET/SIGMETs from aviationweather.gov override it inside ~30 hours.")
+    st.caption("Weather used: the NWS 7-day forecast grid for every hour and point; TAFs and AIRMET/SIGMETs "
+               "from aviationweather.gov override it inside ~30 hours. NWS has no winds aloft, so times and fuel "
+               "assume no tailwind.")
     if not any(d.best for d in days):
         st.warning("No departures fall inside the forecast range for those days.")
         return
@@ -620,8 +608,8 @@ with tab_plan:
     today = datetime.now(ZONE).date()
     c3, c4 = st.columns([2, 2])
     with c3:
-        window = st.date_input("Days you could leave", (today + timedelta(days=1), today + timedelta(days=7)),
-                               min_value=today, max_value=today + timedelta(days=9), format="MM/DD/YYYY")
+        window = st.date_input("Days you could leave", (today + timedelta(days=1), today + timedelta(days=6)),
+                               min_value=today, max_value=today + timedelta(days=6), format="MM/DD/YYYY")
     with c4:
         hours = st.slider("Departure window (local time)", 5, 19, (8, 13), format="%d:00")
     ret = st.checkbox("Plan the trip home too")
@@ -629,8 +617,8 @@ with tab_plan:
         c5, c6 = st.columns([2, 2])
         with c5:
             ret_window = st.date_input("Days you could come home",
-                                       (today + timedelta(days=3), today + timedelta(days=9)),
-                                       min_value=today, max_value=today + timedelta(days=9),
+                                       (today + timedelta(days=3), today + timedelta(days=6)),
+                                       min_value=today, max_value=today + timedelta(days=6),
                                        format="MM/DD/YYYY", key="retwin")
         with c6:
             ret_hours = st.slider("Return departure window", 5, 19, (9, 14), format="%d:00", key="rethrs")
@@ -656,7 +644,7 @@ with tab_plan:
 
 
 # ---------------------------------------------------------------------------
-# Tab 2: 10-day outlook
+# Tab 2: 7-day outlook
 # ---------------------------------------------------------------------------
 def outlook_table(rows):
     return pd.DataFrame([{
@@ -677,21 +665,21 @@ def outlook_table(rows):
 
 with tab_outlook:
     if not PHONE:
-        st.caption("Daily weather for the next 10 days. 'Good hours' counts daylight hours that meet your airport "
-                   "minimums. Days 1–3 are fairly reliable, 4–7 give the general idea, and 8–10 show trends only.")
+        st.caption("Daily weather for the next 7 days. 'Good hours' counts daylight hours that meet your airport "
+                   "minimums. Days 1–3 are fairly reliable; 4–7 give the general idea.")
     if valid_pair:
         try:
             plans, _ = plans_for(dep_id, dest_id)
             if plans:
                 fc = forecast_for(plans)
                 main = plans[0]
-                rt = route_outlook(fc, main.legs, mins, TZ, days=10)
+                rt = route_outlook(fc, main.legs, mins, TZ, days=7)
                 if PHONE:
                     aps = []
                     for ap in [main.airports[0]] + main.stops + [main.airports[-1]]:
                         if ap.ident not in [x.ident for x in aps]:
                             aps.append(ap)
-                    outs = {ap.ident: airport_outlook(fc, ap, mins, TZ, days=10) for ap in aps}
+                    outs = {ap.ident: airport_outlook(fc, ap, mins, TZ, days=7) for ap in aps}
                     st.markdown(f"**{main.route_string}** ({main.label})")
                     for i, r_ in enumerate(rt):
                         per_ap = [(ap.ident, outs[ap.ident][i]) for ap in aps]
@@ -735,7 +723,7 @@ with tab_outlook:
                         continue
                     shown.append(ap.ident)
                     st.subheader(f"{ap.ident} — {ap.name}")
-                    rows = airport_outlook(fc, ap, mins, TZ, days=10)
+                    rows = airport_outlook(fc, ap, mins, TZ, days=7)
                     all_rows[ap.ident] = rows
                     st.dataframe(outlook_table(rows), hide_index=True, width="stretch")
                     with st.expander(f"Hour by hour at {ap.ident}"):
@@ -969,8 +957,9 @@ with status_box:
 
 st.divider()
 st.caption(
-    "**Screening tool, not a weather briefing.** Multi-day forecasts are model output (Open-Meteo/NOAA GFS, HRRR "
-    "and others) and ceilings are estimated. Live observations, TAFs, AIRMET/SIGMETs and PIREPs come from "
+    "**Screening tool, not a weather briefing.** Multi-day forecasts come from the National Weather Service "
+    "7-day forecast grid; winds aloft and icing are estimated. Terrain from the AWS Terrain Tiles open dataset. "
+    "Live observations, TAFs, AIRMET/SIGMETs and PIREPs come from "
     "aviationweather.gov; radar from the Iowa Environmental Mesonet. Before every flight get an official briefing "
     "([1800wxbrief.com](https://www.1800wxbrief.com), Garmin Pilot or ForeFlight), check NOTAMs/TFRs, confirm fuel "
     "at your stops on [AirNav](https://www.airnav.com), and use your POH for performance. "

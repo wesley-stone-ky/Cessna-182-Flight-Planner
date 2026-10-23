@@ -17,13 +17,19 @@ legal weather briefing.
 - `flightplanner/planner.py` is the core: `candidate_plans` → `attach_terrain` →
   `search_days(ctx, plans, start, end, earliest_hour, latest_hour)` → `DayResult`/`PlanResult`
   with `Finding`s (NO-GO / CAUTION).
-- Weather: `weather.GridForecast` (NWS api.weather.gov grids as primary, merged with best-effort Open-Meteo for winds aloft and days 8-10; 0.5° grid; see weather.fetch_forecast and nws.py) plus
+- Weather: `weather.GridForecast` (NWS api.weather.gov grids only, 7 days, 0.5° grid; see weather.fetch_forecast,
+  weather.nws_series and nws.py) plus
   `weather.AviationWeather` (TAF/METAR/AIRMET/SIGMET/G-AIRMET from aviationweather.gov).
   Set a User-Agent and keep AWC under 100 requests/min.
 - Aircraft numbers come only from `config/aircraft.yaml`. Never hard-code performance.
 - All times are UTC internally; display uses `Context.local()` (America/New_York).
 
-- UI: `app.py` has 3 tabs (Trip planner, 10-day outlook, Before you go/live). Outlook logic is in
+- NWS has no winds/humidity aloft: `WxPoint.aloft_estimated` is set, and the planner then gives no tailwind
+  credit and estimates icing conservatively. Don't add Open-Meteo back (its free tier is non-commercial).
+- Terrain: AWS Terrain Tiles (terrain.py), with a conservative offline fallback.
+- Weekend email: `flightplanner/weekend.py` + `scripts/weekend_email.py`, run by
+  `.github/workflows/weekend-email.yml`. Subscriber addresses live only in the SUBSCRIBERS_JSON secret.
+- UI: `app.py` has 3 tabs (Trip planner, 7-day outlook, Before you go/live). Outlook logic is in
   `flightplanner/outlook.py`; the Leaflet live map (NEXRAD radar tiles from IEM, advisories, PIREPs) is in
   `flightplanner/livemap.py`.
 - Fuel: 79 gal total confirmed by owner; usable set to 75 pending the selector placard.

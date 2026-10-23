@@ -6,8 +6,8 @@ cares about most: sky cover, CEILING HEIGHT, VISIBILITY, wind and gusts,
 precipitation chance, thunder chance and the weather type.
 
 Raw layers come as ISO-8601 intervals ("2026-10-23T02:00:00+00:00/PT3H");
-we expand them to hourly arrays in the same shape as the Open-Meteo data so
-the rest of the app doesn't care which source a number came from.
+we expand them to hourly arrays that weather.nws_series turns into
+GridForecast series.
 """
 from __future__ import annotations
 

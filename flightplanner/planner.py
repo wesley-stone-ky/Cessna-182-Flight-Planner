@@ -14,7 +14,7 @@ from .geo import (haversine_nm, initial_bearing, magnetic_variation, sample_line
                   true_to_magnetic, wind_components, wind_triangle)
 from .sun import sun_times
 from .terrain import Terrain
-from .weather import Advisory, GridForecast, WxPoint, taf_at
+from .weather import STD_LAPSE_C_PER_FT, Advisory, GridForecast, WxPoint, taf_at
 
 NOGO, CAUTION, INFO = "NO-GO", "CAUTION", "INFO"
 STATUS_RANK = {"GO": 0, "MARGINAL": 1, "NO-GO": 2}
@@ -362,6 +362,9 @@ def _simulate(ctx: Context, leg: Leg, dep_time: datetime, alt: float):
             return tas, 0.0, 0.0, None
         wdir, wspd, _, _ = wx.wind_at(alt_ft)
         gs, wca = wind_triangle(leg.true_course, tas, wdir, wspd)
+        if wx.aloft_estimated:
+            # No real winds aloft (NWS grids): no tailwind credit, and at least the planning headwind.
+            gs = min(gs, tas - ctx.mins.planning_headwind_kt)
         return gs, wca, gs - tas, wx
 
     # climb
@@ -589,6 +592,13 @@ def evaluate_leg(ctx: Context, leg: Leg, li: int, dep_time: datetime, fuel_on_bo
                                     f" — you would have to fly below {alt:,.0f} ft"))
         findings.append(Finding(lvl, li, _near(ctx, la, lo), txt, "cig-enroute"))
 
+    first_wx = ctx.forecast.at(leg.samples[0][0], leg.samples[0][1], dep_time)
+    if first_wx is not None and first_wx.aloft_estimated:
+        findings.append(Finding(INFO, li, f"leg {leg.dep.ident}-{leg.arr.ident}",
+                                "The NWS forecast has no winds aloft, so time and fuel assume no tailwind and at "
+                                f"least a {m.planning_headwind_kt:.0f} kt headwind. Check winds aloft in your "
+                                "briefing.", "winds"))
+
     # Enroute hazards along the chosen altitude
     cs, ce = sim["cruise"]
     for (la, lo, d), eta in zip(leg.samples, sim["etas"]):
@@ -616,7 +626,18 @@ def evaluate_leg(ctx: Context, leg: Leg, li: int, dep_time: datetime, fuel_on_bo
             elif wx.vis_sm < m.enroute_min_vis_sm:
                 findings.append(Finding(CAUTION, li, where, f"Visibility ~{wx.vis_sm:.1f} sm {where}", "vis"))
         _, _, t_alt, rh_alt = wx.wind_at(pt_alt)
-        if t_alt is not None and rh_alt is not None and t_alt <= 2 and rh_alt >= 85:
+        if wx.aloft_estimated:
+            # No temperature or humidity aloft in the NWS grid: use the standard lapse rate from the
+            # surface, and assume cloud at altitude whenever the sky is mostly covered or rain is likely.
+            if wx.temp_c is not None:
+                t_alt = wx.temp_c - (pt_alt - wx.surface_elev_ft) * STD_LAPSE_C_PER_FT
+            cloudy = (wx.sky_cover or 0) >= 70 or wx.precip_prob >= 50
+            if t_alt is not None and t_alt <= 2 and cloudy:
+                findings.append(Finding(NOGO if m.ifr else CAUTION, li, where,
+                                        f"Possible icing in cloud at {pt_alt:,.0f} ft {where}: estimated "
+                                        f"{t_alt:.0f}°C there with mostly cloudy skies (the NWS forecast has no "
+                                        "humidity aloft, so cloud at your altitude is assumed)", "ice"))
+        elif t_alt is not None and rh_alt is not None and t_alt <= 2 and rh_alt >= 85:
             findings.append(Finding(NOGO if m.ifr else CAUTION, li, where,
                                     f"Clouds near freezing at {pt_alt:,.0f} ft {where} (icing risk in cloud)", "ice"))
         seg_terr = leg.max_terrain(d - WX_STEP_NM / 2, d + WX_STEP_NM / 2)

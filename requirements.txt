@@ -1,5 +1,6 @@
 streamlit>=1.50
 requests>=2.31
+Pillow>=10.0
 PyYAML>=6.0
 pandas>=2.1
 altair>=5.0

@@ -1,0 +1,8 @@
+[
+  {
+    "email": "pilot@example.com",
+    "airports": ["KLEX"],
+    "tz": "America/New_York",
+    "minimums": {"airport_min_ceiling_ft_agl": 3000, "airport_min_vis_sm": 5, "max_gust_kt": 25}
+  }
+]

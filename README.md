@@ -27,7 +27,7 @@ be typed in.
 
 - **🗓️ Trip planner:** finds the best days, departure times and routes in your travel window. For the
   day you pick, it shows the forecast at every 20-nm point along the route at your ETA.
-- **🌤️ 10-day outlook:** daily weather at each airport (good flying hours, best window, lowest ceiling,
+- **🌤️ 7-day outlook:** daily weather at each airport (good flying hours, best window, lowest ceiling,
   wind and gusts, rain, storms, winds at 6,000 ft), an hour-by-hour view, and an en-route summary showing
   how much room the clouds leave over the terrain.
 - **🛫 Before you go (live):** use it the morning of the flight. It shows:
@@ -49,13 +49,16 @@ The sidebar lists every data source with a ✅ or ❌ and when it was last pulle
    more. It also keeps a few one-stop options as weather alternatives, such as west of the Smokies
    versus east.
 2. **Pulls weather for every 20 nm of each route:**
-   - **1–16 days:** Open-Meteo hourly forecasts (NOAA GFS and other models). These cover low/mid
-     cloud, visibility, precipitation chance, CAPE, freezing level, and winds and temperatures at 925,
-     850, 700 and 600 hPa.
+   - **1–7 days:** National Weather Service forecast grids (api.weather.gov): sky cover, ceiling
+     height, visibility, wind and gusts, precipitation and thunder chance, weather type. Days 8+ are
+     left out on purpose; forecasts that far out are too unreliable to plan on.
+   - NWS grids have **no winds or humidity aloft**. The app uses the NWS mixed-layer wind as a
+     stand-in, plans time and fuel with no tailwind credit and at least a 10 kt headwind, and estimates
+     icing from the surface temperature (standard lapse rate) whenever skies are mostly cloudy.
    - **Next ~30 h:** aviationweather.gov TAFs (including TEMPO/PROB groups), METARs, AIRMET/SIGMETs
      and G-AIRMETs, which override the model near the airports.
-3. **Pulls terrain** along a ±5 nm corridor (Open-Meteo elevation, cached on disk), so it knows when
-   you're over the Cumberland Plateau and Blue Ridge.
+3. **Pulls terrain** along a ±5 nm corridor (AWS Terrain Tiles, cached on disk, +100 ft pad because
+   tiles shave summits), so it knows when you're over the Cumberland Plateau and Blue Ridge.
 4. **Flies each option** at each departure time in your window:
    - VFR hemispheric altitudes (14 CFR 91.159), checked against terrain and estimated cloud bases.
    - Climb, cruise and descent from the aircraft profile, with wind-corrected groundspeed segment by
@@ -65,8 +68,8 @@ The sidebar lists every data source with a ✅ or ❌ and when it was last pulle
    - airport ceiling and visibility
    - crosswind on the best runway and gusts
    - en-route ceilings versus terrain
-   - convection (thunderstorm codes and CAPE)
-   - icing risk (in cloud at or below +2 °C)
+   - convection (NWS thunder chance and weather type)
+   - icing risk (likely cloud at or below +2 °C, estimated)
    - ridge-top winds
    - active advisories
    - daylight
@@ -160,8 +163,11 @@ flightplanner/
   aircraft.py              performance model (climb/cruise/descent from YAML)
   airports.py              bundled airport + runway DB, fuel-stop search, favorites
   geo.py                   great circle, wind triangle, magnetic variation (WMM)
-  terrain.py               corridor terrain (Open-Meteo elevation, cached)
-  weather.py               Open-Meteo model forecast + aviationweather.gov products
+  terrain.py               corridor terrain (AWS Terrain Tiles, cached)
+  weather.py               NWS 7-day grid forecast + aviationweather.gov products
+  nws.py                   api.weather.gov gridpoint client
+  outlook.py               7-day daily outlook per airport and route
+  weekend.py               "Can you fly this weekend?" email content
   planner.py               routes, leg simulation, go/no-go screening, day search
   export.py                .fpl / .gfp / CSV / text brief
   demo.py                  synthetic forecast (offline demo + tests)
@@ -169,6 +175,7 @@ config/aircraft.yaml       YOUR airplane's numbers
 config/minimums.yaml       YOUR personal minimums
 data/airports.csv          OurAirports extract (public domain)
 scripts/build_airport_data.py   refresh the airport extract
+scripts/weekend_email.py  send the weekend email (GitHub Actions: .github/workflows/weekend-email.yml)
 tests/                     offline pytest suite
 ```
 
@@ -176,7 +183,9 @@ Refresh the airport data occasionally with `python scripts/build_airport_data.py
 
 ## Data sources and references
 
-- Open-Meteo forecast and elevation APIs (free for non-commercial use): https://open-meteo.com
+- National Weather Service API (US government data): https://www.weather.gov/documentation/services-web-api
+- Terrain Tiles on AWS (Mapzen/Tilezen; USGS NED, SRTM and other open sources):
+  https://registry.opendata.aws/terrain-tiles/
 - Aviation Weather Center Data API: https://aviationweather.gov/data/api/
 - OurAirports (public domain): https://ourairports.com/data/
 - 14 CFR 91.151 (VFR fuel), 91.155 (VFR weather minimums), 91.159 (VFR cruising altitudes),
@@ -191,3 +200,19 @@ Refresh the airport data occasionally with `python scripts/build_airport_data.py
 - Pull fuel prices and availability for stop candidates.
 - Add a "send to my copilot" email/text summary.
 - Add weight & balance for you, your copilot and bags.
+
+## Weekend email
+
+`scripts/weekend_email.py` emails "Can you fly this weekend?" (GO / MARGINAL / NO-GO, best window and
+the main reason for each weekend day at each airport). GitHub Actions runs it every Thursday at
+22:00 UTC; you can also run it by hand from the Actions tab with a test address.
+
+Repository secrets it needs (Settings → Secrets and variables → Actions):
+
+| Secret | What |
+|---|---|
+| `SMTP_USER` | the sending Gmail address |
+| `SMTP_PASSWORD` | a Gmail App Password for it (needs 2-step verification) |
+| `SUBSCRIBERS_JSON` | the list, in the format of `config/subscribers.example.json` |
+
+Preview locally without sending: `python scripts/weekend_email.py --to you@example.com --dry-run`.

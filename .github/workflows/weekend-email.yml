@@ -1,0 +1,39 @@
+name: Weekend flying email
+
+on:
+  schedule:
+    # Thursdays 22:00 UTC = 6 PM EDT (5 PM EST in winter). GitHub may start it a few minutes late.
+    - cron: "0 22 * * 4"
+  workflow_dispatch:
+    inputs:
+      to:
+        description: "Send one test email to this address (leave empty to email the whole list)"
+        required: false
+      airport:
+        description: "Airport for the test email"
+        required: false
+        default: "KLEX"
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Send
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM_NAME: ${{ vars.MAIL_FROM_NAME }}
+          SUBSCRIBERS_JSON: ${{ secrets.SUBSCRIBERS_JSON }}
+          TEST_TO: ${{ inputs.to }}
+          TEST_AIRPORT: ${{ inputs.airport }}
+        run: python scripts/weekend_email.py
