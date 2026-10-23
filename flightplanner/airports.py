@@ -65,8 +65,15 @@ class Airport:
     tz: str = "America/New_York"   # IANA time zone of the airport
 
     @property
+    def avgas(self) -> bool | None:
+        """100LL per the FAA airport data (data/fuel.csv): True / False / None = unknown."""
+        from .fuel import avgas_status
+        return avgas_status(self.ident)
+
+    @property
     def known_fuel(self) -> bool:
-        return self.ident in KNOWN_FUEL
+        status = self.avgas
+        return self.ident in KNOWN_FUEL if status is None else status
 
     @property
     def label(self) -> str:

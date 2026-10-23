@@ -50,6 +50,11 @@ legal weather briefing.
   the default; `_night_checks` in planner.py then adds the 45-min night reserve (91.151), a 61.57(b)
   night-currency caution unless `night_current`, and a caution for night legs over terrain > 3,000 ft.
 
+- Fuel availability: `flightplanner/fuel.py` reads `data/fuel.csv` (FAA NASR APT_BASE FUEL_TYPES + APT_ATT
+  attendance), built by `scripts/build_fuel_data.py` and refreshed weekly by
+  `.github/workflows/refresh-fuel.yml`. Stops the FAA says lack 100LL are never used; unknown falls back to
+  `airports.KNOWN_FUEL`. Prices are not scraped (no free official source) — the UI links to AirNav.
+
 ## Rules
 - Safety first: when unsure, make a check MORE conservative and say why in the finding text.
 - Keep the "screening only — get an official briefing" disclaimer in the UI and exports.

@@ -210,6 +210,11 @@ def _leg_ok(ac: Aircraft, mins: Minimums, a: Airport, b: Airport) -> bool:
     return gal + reserve <= ac.usable_gal and hours <= mins.max_leg_hours + 0.01
 
 
+def _sells_avgas(ap: Airport) -> bool:
+    """Never route a fuel stop to an airport the FAA data says has no 100LL."""
+    return ap.avgas is not False
+
+
 def _stop_cost(ap: Airport, mins: Minimums) -> float:
     cost = 0.0
     if mins.prefer_known_fuel_stops and not ap.known_fuel:
@@ -245,6 +250,8 @@ def candidate_plans(db: AirportDB, dep: Airport, dest: Airport, ac: Aircraft, mi
     xt_max = max(40.0, 0.25 * D)
     scored: list[tuple[float, Airport]] = []
     for ap, xt, at in db.corridor(dep, dest, xt_max, mins.min_runway_ft, 0.15, 0.85):
+        if not _sells_avgas(ap):
+            continue
         if not (_leg_ok(ac, mins, dep, ap) and _leg_ok(ac, mins, ap, dest)):
             continue
         d1 = haversine_nm(dep.lat, dep.lon, ap.lat, ap.lon)
@@ -258,9 +265,9 @@ def candidate_plans(db: AirportDB, dep: Airport, dest: Airport, ac: Aircraft, mi
     # Two-stop options only if nothing with <=1 stop works
     if not plans:
         firsts = [(ap, xt, at) for ap, xt, at in db.corridor(dep, dest, xt_max, mins.min_runway_ft, 0.15, 0.55)
-                  if _leg_ok(ac, mins, dep, ap)]
+                  if _leg_ok(ac, mins, dep, ap) and _sells_avgas(ap)]
         seconds = [(ap, xt, at) for ap, xt, at in db.corridor(dep, dest, xt_max, mins.min_runway_ft, 0.45, 0.9)
-                   if _leg_ok(ac, mins, ap, dest)]
+                   if _leg_ok(ac, mins, ap, dest) and _sells_avgas(ap)]
         firsts = sorted(firsts, key=lambda c: _stop_cost(c[0], mins) + abs(c[1]))[:25]
         seconds = sorted(seconds, key=lambda c: _stop_cost(c[0], mins) + abs(c[1]))[:25]
         pairs: list[tuple[float, Airport, Airport]] = []

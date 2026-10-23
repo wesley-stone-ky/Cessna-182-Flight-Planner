@@ -65,6 +65,8 @@ from flightplanner.planner import (NOGO, CAUTION, Context, attach_terrain, candi
                                    forecast_points, route_weather_rows, search_days)
 from flightplanner.terrain import Terrain
 from flightplanner.weather import AviationWeather, decode_metar, fetch_forecast
+from flightplanner.fuel import fuel_info
+from flightplanner.fuel import price_url as fuel_price_url
 from flightplanner.wb import Loading, WeightBalance
 from flightplanner.weekend import GO, MARGINAL, NOGO, can_i_fly
 
@@ -535,6 +537,27 @@ def findings_block(r):
         st.success("Nothing in the forecast breaks your minimums on this plan.")
 
 
+def fuel_block(r) -> None:
+    """Fuel at each fuel stop and the destination: FAA data + a link for today's price."""
+    rows = []
+    for ap in r.plan.stops + [r.plan.airports[-1]]:
+        info = fuel_info(ap.ident)
+        role = "Fuel stop" if ap in r.plan.stops else "Destination"
+        if info is not None:
+            avgas = "✅ 100LL" if info.has_avgas else "❌ no 100LL"
+            line = f"{avgas} · {info.summary()}"
+        elif ap.known_fuel:
+            line = "✅ 100LL (from the built-in list; FAA data not loaded yet)"
+        else:
+            line = "⚪ fuel not confirmed — call ahead"
+        rows.append(f"- **{ap.ident}** ({role}): {line} · [today's price]({fuel_price_url(ap.ident)})")
+    if rows:
+        st.markdown("**⛽ Fuel**\n" + "\n".join(rows))
+        st.caption("Fuel types and attendance from the FAA airport database (Chart Supplement data). "
+                   "Prices change daily and aren't in any free official source, so they link to AirNav. "
+                   "Call ahead for after-hours or self-serve.")
+
+
 def plan_detail(ctx, r, key: str):
     metric_grid([("Verdict", STATUS_ICON[r.status]), ("Leave", ctx.local(r.dep_time).strftime("%-I:%M %p")),
                  ("Arrive", ctx.local(r.arr_time).strftime("%-I:%M %p")),
@@ -586,6 +609,8 @@ def plan_detail(ctx, r, key: str):
                     f"{mins.corridor_halfwidth_nm:.0f} nm of course, triangles are estimated cloud bases (MSL).")
         st.altair_chart(profile_chart(r), width="stretch")
 
+
+    fuel_block(r)
 
     ids = [a.ident for a in r.plan.airports]
     zbuf = io.BytesIO()
