@@ -32,7 +32,36 @@ from flightplanner.planner import (NOGO, CAUTION, Context, attach_terrain, candi
 from flightplanner.terrain import Terrain
 from flightplanner.weather import AviationWeather, decode_metar, fetch_forecast
 
-st.set_page_config(page_title="C182 Trip Planner", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="C182 Planner", page_icon="✈️", layout="wide")
+
+
+def _detect_phone() -> bool:
+    """Phone layout: ?view=phone / ?view=desktop wins, else guess from the browser."""
+    v = (st.query_params.get("view") or "").lower()
+    if v in ("phone", "mobile"):
+        return True
+    if v == "desktop":
+        return False
+    try:
+        ua = (st.context.headers.get("User-Agent") or "").lower()
+    except Exception:
+        return False
+    return any(k in ua for k in ("iphone", "android", "mobile", "ipod")) and "ipad" not in ua
+
+
+PHONE = _detect_phone()
+if PHONE:
+    st.markdown("""<style>
+      .block-container {padding: 2.6rem .75rem 4rem .75rem !important;}
+      h1, h2 {font-size: 1.45rem !important;}
+      h3 {font-size: 1.2rem !important;}
+      .stButton button, .stDownloadButton button {min-height: 3.1rem; font-size: 1.05rem;}
+      [data-testid="stMetricValue"] {font-size: 1.25rem !important;}
+      [data-testid="stMetricLabel"] p {font-size: .85rem !important;}
+      button[data-baseweb="tab"] {padding: .5rem .55rem !important;}
+      button[data-baseweb="tab"] p {font-size: 1rem !important;}
+      div[data-testid="stExpander"] summary p {font-size: 1rem;}
+    </style>""", unsafe_allow_html=True)
 
 STATUS_ICON = {"GO": "🟢 GO", "MARGINAL": "🟡 MARGINAL", "NO-GO": "🔴 NO-GO"}
 VERDICT_ICON = {"Good": "🟢 Good", "Fair": "🟡 Fair", "Poor": "🔴 Poor", "No data": "⚪ No data"}
@@ -98,7 +127,13 @@ def get_awc(airport_ids: tuple[str, ...], pirep_points: tuple[tuple[str, float],
 base_ac = Aircraft.load()
 base_mins = load_minimums()
 
-with st.sidebar:
+if PHONE:
+    st.markdown("## ✈️ C182 Trip Planner")
+    settings_parent = st.expander("⚙️ Plane & personal minimums")
+else:
+    settings_parent = st.sidebar
+
+with settings_parent:
     st.header("✈️ Aircraft")
     st.caption(f"{base_ac.raw.get('model')} · {base_ac.raw.get('avionics')}")
     settings = list(base_ac.raw["cruise_settings"].keys())
@@ -106,12 +141,15 @@ with st.sidebar:
                            index=settings.index(base_ac.raw.get("default_cruise_setting", settings[0])))
     usable = st.number_input("Usable fuel (gal)", 20.0, 120.0, float(base_ac.usable_gal), 1.0,
                              help="The number on the fuel selector placard ('BOTH – xx GAL').")
-    with st.expander("Performance numbers in use"):
-        cs = base_ac.raw["cruise_settings"][setting]
-        st.write(f"Fuel flow: **{cs['gph']} gph**")
-        st.dataframe(pd.DataFrame({"Altitude": list(cs["ktas"].keys()), "KTAS": list(cs["ktas"].values())}),
-                     hide_index=True, width="stretch")
-        st.caption("Edit `config/aircraft.yaml` with the numbers from YOUR POH, Section 5.")
+    cs = base_ac.raw["cruise_settings"][setting]
+    if PHONE:   # no expanders inside expanders
+        st.caption(f"{setting} power: {cs['gph']} gph, " + ", ".join(f"{k}: {v} kt" for k, v in cs["ktas"].items()))
+    else:
+        with st.expander("Performance numbers in use"):
+            st.write(f"Fuel flow: **{cs['gph']} gph**")
+            st.dataframe(pd.DataFrame({"Altitude": list(cs["ktas"].keys()), "KTAS": list(cs["ktas"].values())}),
+                         hide_index=True, width="stretch")
+            st.caption("Edit `config/aircraft.yaml` with the numbers from YOUR POH, Section 5.")
 
     st.header("🧭 Personal minimums")
     rules = st.radio("Flight rules", ["VFR", "IFR"], horizontal=True, index=0 if not base_mins.ifr else 1,
@@ -127,12 +165,17 @@ with st.sidebar:
     day_only = st.checkbox("Daylight only", base_mins.day_only)
     ground = st.slider("Time on the ground at a fuel stop (min)", 20, 120, int(base_mins.fuel_stop_ground_minutes), 5)
 
-    st.header("🛰️ Live data")
     # Offline demo forecast is for development only: add ?demo=1 to the URL to use it.
     demo = st.query_params.get("demo") == "1"
-    if demo:
-        st.warning("Demo weather is ON (made-up forecast). Remove ?demo=1 from the address to use live data.")
-    status_box = st.container()
+    if not PHONE:
+        st.header("🛰️ Live data")
+        if demo:
+            st.warning("Demo weather is ON (made-up forecast). Remove ?demo=1 from the address to use live data.")
+        status_box = st.container()
+        st.caption("📱 [Phone view](?view=phone)")
+    else:
+        status_box = None
+        st.caption("🖥️ [Desktop view](?view=desktop)")
 
 ac = Aircraft.load(cruise_setting=setting, overrides={"fuel.usable_gal": usable})
 mins = load_minimums({
@@ -202,7 +245,8 @@ def ago(dt: datetime | None) -> str:
 # ---------------------------------------------------------------------------
 # Header + shared trip input
 # ---------------------------------------------------------------------------
-st.title("C182 Trip Planner")
+if not PHONE:
+    st.title("C182 Trip Planner")
 
 fav_labels = [f"{k} — {v}" for k, v in FAVORITES.items()] + ["Other airport…"]
 
@@ -232,7 +276,32 @@ except KeyError as e:
     st.error(str(e).strip('"'))
     valid_pair = False
 
-tab_plan, tab_outlook, tab_live = st.tabs(["🗓️ Trip planner", "🌤️ 10-day outlook", "🛫 Before you go (live)"])
+tab_plan, tab_outlook, tab_live = st.tabs(
+    ["🗓️ Plan", "🌤️ Outlook", "🛫 Go / no-go"] if PHONE else
+    ["🗓️ Trip planner", "🌤️ 10-day outlook", "🛫 Before you go (live)"])
+
+
+def metric_grid(items: list[tuple[str, str]]) -> None:
+    """Metrics in one row on desktop, two per row on a phone."""
+    per = 2 if PHONE else len(items)
+    for i in range(0, len(items), per):
+        for col, (label, value) in zip(st.columns(per), items[i:i + per]):
+            col.metric(label, value)
+
+
+def day_cards(ctx, days, key: str) -> None:
+    """Phone: one tappable-looking card per day instead of a wide table."""
+    for d in days:
+        b = d.best
+        with st.container(border=True):
+            if b is None:
+                st.markdown(f"**⚪ {d.day:%a %b %-d}** · outside forecast range")
+                continue
+            st.markdown(f"**{STATUS_ICON[b.status]} · {d.day:%a %b %-d}**  \n"
+                        f"Leave **{ctx.local(b.dep_time):%-I:%M %p}** → arrive {ctx.local(b.arr_time):%-I:%M %p}  \n"
+                        f"{b.plan.label} · {b.flight_hours:.1f} h flying")
+            why = b.top_reasons(1)
+            st.caption((why[0] if why else "Meets your minimums") + f" · {b.confidence}")
 
 
 # ---------------------------------------------------------------------------
@@ -297,38 +366,55 @@ def findings_block(r):
 
 
 def plan_detail(ctx, r, key: str):
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Verdict", STATUS_ICON[r.status])
-    m2.metric("Leave", ctx.local(r.dep_time).strftime("%-I:%M %p"))
-    m3.metric("Arrive", ctx.local(r.arr_time).strftime("%-I:%M %p"))
-    m4.metric("Flying time", f"{r.flight_hours:.1f} h")
-    m5.metric("Fuel stops", len(r.plan.stops))
+    metric_grid([("Verdict", STATUS_ICON[r.status]), ("Leave", ctx.local(r.dep_time).strftime("%-I:%M %p")),
+                 ("Arrive", ctx.local(r.arr_time).strftime("%-I:%M %p")),
+                 ("Flying time", f"{r.flight_hours:.1f} h"), ("Fuel stops", str(len(r.plan.stops)))])
     st.caption(f"Forecast confidence: **{r.confidence}** · {r.plan.total_nm:.0f} nm total")
     findings_block(r)
 
-    left, right = st.columns([3, 2])
-    with left:
-        st.pydeck_chart(route_map(r), width="stretch")
-    with right:
-        st.dataframe(pd.DataFrame([{
-            "Leg": f"{lr.leg.dep.ident} → {lr.leg.arr.ident}", "Dist": f"{lr.leg.dist_nm:.0f} nm",
-            "Alt": f"{lr.alt_ft:,.0f}", "MC/MH": f"{lr.leg.mag_course:03.0f}/{lr.mag_heading:03.0f}",
-            "GS": f"{lr.avg_gs_kt:.0f} ({lr.avg_wind_component_kt:+.0f})", "ETE": f"{lr.minutes:.0f} min",
-            "Fuel used": f"{lr.fuel_used_gal:.1f}", "Land with": f"{lr.fuel_at_landing_gal:.1f} gal",
-        } for lr in r.legs]), hide_index=True, width="stretch")
+    if PHONE:
+        st.pydeck_chart(route_map(r), width="stretch", height=300)
         for lr in r.legs:
-            if lr.dep_wx:
-                st.caption(f"**{lr.leg.dep.ident}** at {ctx.local(lr.dep_time):%-I:%M %p}: {lr.dep_wx.summary()}")
-        last = r.legs[-1]
-        if last.arr_wx:
-            st.caption(f"**{last.leg.arr.ident}** at {ctx.local(last.arr_time):%-I:%M %p}: {last.arr_wx.summary()}")
+            with st.container(border=True):
+                st.markdown(f"**{lr.leg.dep.ident} → {lr.leg.arr.ident}** · {lr.leg.dist_nm:.0f} nm · "
+                            f"{lr.minutes:.0f} min  \n"
+                            f"{lr.alt_ft:,.0f} ft · heading {lr.mag_heading:03.0f}° · GS {lr.avg_gs_kt:.0f} kt "
+                            f"({lr.avg_wind_component_kt:+.0f})  \n"
+                            f"Fuel {lr.fuel_used_gal:.1f} gal · land with **{lr.fuel_at_landing_gal:.1f} gal**")
+                if lr.dep_wx:
+                    st.caption(f"{lr.leg.dep.ident} at {ctx.local(lr.dep_time):%-I:%M %p}: {lr.dep_wx.summary()}")
+                if lr.arr_wx:
+                    st.caption(f"{lr.leg.arr.ident} at {ctx.local(lr.arr_time):%-I:%M %p}: {lr.arr_wx.summary()}")
+        with st.expander("Weather along the route"):
+            st.dataframe(pd.DataFrame(route_weather_rows(ctx, r)), hide_index=True, width="stretch")
+        with st.expander("Altitude profile"):
+            st.altair_chart(profile_chart(r), width="stretch")
+            st.caption("Blue = your altitude, grey = highest terrain near course, triangles = est. cloud bases.")
+    else:
+        left, right = st.columns([3, 2])
+        with left:
+            st.pydeck_chart(route_map(r), width="stretch")
+        with right:
+            st.dataframe(pd.DataFrame([{
+                "Leg": f"{lr.leg.dep.ident} → {lr.leg.arr.ident}", "Dist": f"{lr.leg.dist_nm:.0f} nm",
+                "Alt": f"{lr.alt_ft:,.0f}", "MC/MH": f"{lr.leg.mag_course:03.0f}/{lr.mag_heading:03.0f}",
+                "GS": f"{lr.avg_gs_kt:.0f} ({lr.avg_wind_component_kt:+.0f})", "ETE": f"{lr.minutes:.0f} min",
+                "Fuel used": f"{lr.fuel_used_gal:.1f}", "Land with": f"{lr.fuel_at_landing_gal:.1f} gal",
+            } for lr in r.legs]), hide_index=True, width="stretch")
+            for lr in r.legs:
+                if lr.dep_wx:
+                    st.caption(f"**{lr.leg.dep.ident}** at {ctx.local(lr.dep_time):%-I:%M %p}: {lr.dep_wx.summary()}")
+            last = r.legs[-1]
+            if last.arr_wx:
+                st.caption(f"**{last.leg.arr.ident}** at {ctx.local(last.arr_time):%-I:%M %p}: {last.arr_wx.summary()}")
 
-    st.markdown("**Weather along the route at your ETA** (forecast at each 20-nm point)")
-    st.dataframe(pd.DataFrame(route_weather_rows(ctx, r)), hide_index=True, width="stretch")
+        st.markdown("**Weather along the route at your ETA** (forecast at each 20-nm point)")
+        st.dataframe(pd.DataFrame(route_weather_rows(ctx, r)), hide_index=True, width="stretch")
 
-    st.markdown("**Altitude profile** — blue is your planned altitude, grey is the highest terrain within "
-                f"{mins.corridor_halfwidth_nm:.0f} nm of course, triangles are estimated cloud bases (MSL).")
-    st.altair_chart(profile_chart(r), width="stretch")
+        st.markdown("**Altitude profile** — blue is your planned altitude, grey is the highest terrain within "
+                    f"{mins.corridor_halfwidth_nm:.0f} nm of course, triangles are estimated cloud bases (MSL).")
+        st.altair_chart(profile_chart(r), width="stretch")
+
 
     ids = [a.ident for a in r.plan.airports]
     zbuf = io.BytesIO()
@@ -337,7 +423,7 @@ def plan_detail(ctx, r, key: str):
             n = f"{lr.leg.dep.ident}-{lr.leg.arr.ident}"
             z.writestr(f"{n}.fpl", leg_fpl(lr.leg))
             z.writestr(f"{n}.gfp", leg_gfp(lr.leg))
-    b1, b2, b3 = st.columns(3)
+    b1, b2, b3 = (st.container(), st.container(), st.container()) if PHONE else st.columns(3)
     stamp = ctx.local(r.dep_time).strftime("%Y%m%d-%H%M")
     b1.download_button("📄 Trip summary (.txt)", text_brief(ctx, r), f"trip_{stamp}_{'-'.join(ids)}.txt",
                        width="stretch", key=f"{key}_txt")
@@ -389,7 +475,10 @@ def show_direction(title: str, res: dict, key: str):
     if not any(d.best for d in days):
         st.warning("No departures fall inside the forecast range for those days.")
         return
-    st.dataframe(day_table(ctx, days), hide_index=True, width="stretch")
+    if PHONE:
+        day_cards(ctx, days, key)
+    else:
+        st.dataframe(day_table(ctx, days), hide_index=True, width="stretch")
 
     good = [d for d in days if d.best and d.status == "GO"] or [d for d in days if d.best]
     labels = [d.day.strftime("%a %b %-d") for d in days if d.best]
@@ -472,8 +561,9 @@ def outlook_table(rows):
 
 
 with tab_outlook:
-    st.caption("Daily weather for the next 10 days. 'Good hours' counts daylight hours that meet your airport "
-               "minimums. Days 1–3 are fairly reliable, 4–7 give the general idea, and 8–10 show trends only.")
+    if not PHONE:
+        st.caption("Daily weather for the next 10 days. 'Good hours' counts daylight hours that meet your airport "
+                   "minimums. Days 1–3 are fairly reliable, 4–7 give the general idea, and 8–10 show trends only.")
     if valid_pair:
         try:
             plans, _ = plans_for(dep_id, dest_id)
@@ -481,6 +571,36 @@ with tab_outlook:
                 fc = forecast_for(plans)
                 main = plans[0]
                 rt = route_outlook(fc, main.legs, mins, TZ, days=10)
+                if PHONE:
+                    aps = []
+                    for ap in [main.airports[0]] + main.stops + [main.airports[-1]]:
+                        if ap.ident not in [x.ident for x in aps]:
+                            aps.append(ap)
+                    outs = {ap.ident: airport_outlook(fc, ap, mins, TZ, days=10) for ap in aps}
+                    st.markdown(f"**{main.route_string}** ({main.label})")
+                    for i, r_ in enumerate(rt):
+                        per_ap = [(ap.ident, outs[ap.ident][i]) for ap in aps]
+                        if r_["verdict"] == "No data" and all(o.verdict == "No data" for _, o in per_ap):
+                            continue
+                        worst = max([r_["verdict"]] + [o.verdict for _, o in per_ap],
+                                    key=lambda v: {"Good": 0, "Fair": 1, "Poor": 2, "No data": -1}[v])
+                        with st.container(border=True):
+                            st.markdown(f"**{VERDICT_ICON[worst]} · {r_['day']:%a %b %-d}**  \n"
+                                        f"En route: {VERDICT_ICON[r_['verdict']]}"
+                                        + (f", storms {r_['storms']}" if r_["storms"] not in ("low", "—") else ""))
+                            st.caption("  \n".join(
+                                f"{ident}: {VERDICT_ICON[o.verdict]} · best {o.best_window} · {o.summary}"
+                                for ident, o in per_ap))
+                    for ap in aps:
+                        with st.expander(f"{ap.ident} hour by hour"):
+                            rows = outs[ap.ident]
+                            dsel = st.selectbox("Day", [o.day for o in rows if o.verdict != "No data"],
+                                                format_func=lambda d_: d_.strftime("%a %b %-d"),
+                                                key=f"hr_{ap.ident}")
+                            st.dataframe(pd.DataFrame(hourly_rows(fc, ap, dsel, TZ)), hide_index=True,
+                                         width="stretch")
+                    st.caption("Days 1–3 are fairly reliable, 4–7 give the general idea, 8–10 are trends only.")
+                    raise StopIteration  # phone view done
                 st.subheader(f"Along the route: {main.route_string} ({main.label})")
                 st.dataframe(pd.DataFrame([{
                     "Day": r_["day"].strftime("%a %b %-d"), "En route": VERDICT_ICON[r_["verdict"]],
@@ -503,6 +623,8 @@ with tab_outlook:
                                             format_func=lambda d_: d_.strftime("%a %b %-d"), key=f"hr_{ap.ident}")
                         st.dataframe(pd.DataFrame(hourly_rows(fc, ap, dsel, TZ)), hide_index=True, width="stretch")
                         st.caption("Ceilings and flight categories here are model estimates, not observations.")
+        except StopIteration:
+            pass
         except Exception as e:
             st.error(f"Couldn't load the outlook. {friendly(e)}")
 
@@ -511,15 +633,19 @@ with tab_outlook:
 # Tab 3: Before you go (live)
 # ---------------------------------------------------------------------------
 with tab_live:
-    st.caption("Use this the morning of the flight and again before you leave the house. It pulls the latest "
-               "observations (METARs), TAFs, AIRMET/SIGMETs, pilot reports and radar, and re-runs the go/no-go "
-               "with them. Then get your official briefing.")
+    if PHONE:
+        st.caption("Latest observations, forecasts, radar and pilot reports for your route. "
+                   "Then get your official briefing.")
+    else:
+        st.caption("Use this the morning of the flight and again before you leave the house. It pulls the latest "
+                   "observations (METARs), TAFs, AIRMET/SIGMETs, pilot reports and radar, and re-runs the go/no-go "
+                   "with them. Then get your official briefing.")
     if valid_pair:
         plans, _ = plans_for(dep_id, dest_id)
         if not plans:
             st.warning("No route fits your fuel and leg limits.")
         else:
-            lc1, lc2, lc3 = st.columns([3, 2, 2])
+            lc1, lc2, lc3 = (st.container(), st.container(), st.container()) if PHONE else st.columns([3, 2, 2])
             with lc1:
                 pi = st.selectbox("Route", range(len(plans)), format_func=lambda i: f"{plans[i].label} "
                                   f"({plans[i].total_nm:.0f} nm)", key="live_plan")
@@ -527,9 +653,12 @@ with tab_live:
                 when_opt = st.selectbox("Leaving", ["Now", "In 30 minutes", "In 1 hour", "In 2 hours", "At…"],
                                         index=2, key="live_when")
             with lc3:
-                at_time = st.time_input("Departure time", time(9, 0), step=900, key="live_time",
-                                        disabled=when_opt != "At…")
-            r1, r2 = st.columns([1, 3])
+                if PHONE and when_opt != "At…":
+                    at_time = time(9, 0)
+                else:
+                    at_time = st.time_input("Departure time", time(9, 0), step=900, key="live_time",
+                                            disabled=when_opt != "At…")
+            r1, r2 = (st.container(), st.container()) if PHONE else st.columns([1, 3])
             with r1:
                 if st.button("🔄 Refresh live data", width="stretch"):
                     get_awc.clear()
@@ -579,14 +708,13 @@ with tab_live:
                 st.caption(f"Live data pulled {ctx.local(fetched):%-I:%M %p} ({ago(fetched)}). "
                            "METARs update hourly (more often when weather changes).")
                 findings_block(r)
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Arrive", ctx.local(r.arr_time).strftime("%-I:%M %p"))
-                m2.metric("Flying time", f"{r.flight_hours:.1f} h")
-                m3.metric("Cruise", " / ".join(f"{lr.alt_ft:,.0f}" for lr in r.legs))
-                m4.metric("Land with", f"{min(lr.fuel_at_landing_gal for lr in r.legs):.1f} gal")
+                metric_grid([("Arrive", ctx.local(r.arr_time).strftime("%-I:%M %p")),
+                             ("Flying time", f"{r.flight_hours:.1f} h"),
+                             ("Cruise", " / ".join(f"{lr.alt_ft:,.0f}" for lr in r.legs)),
+                             ("Land with", f"{min(lr.fuel_at_landing_gal for lr in r.legs):.1f} gal")])
 
                 st.markdown("##### Right now at your airports (METAR)")
-                cols = st.columns(len(plan.airports))
+                cols = [st.container(border=True) for _ in plan.airports] if PHONE else st.columns(len(plan.airports))
                 for col, ap in zip(cols, plan.airports):
                     with col:
                         m = metars.get(ap.ident)
@@ -598,6 +726,14 @@ with tab_live:
                         st.markdown(f"**{ap.ident}** {CAT_BADGE.get(d['category'], d['category'])}"
                                     + (f"  \n:gray[from {m['_station']}, {m['_dist_nm']:.0f} nm]" if borrowed else ""))
                         st.caption(f"Observed {ago(d['time'])}")
+                        if PHONE:
+                            st.markdown(f"Wind **{d['wind_text']}** · vis **"
+                                        f"{'10+' if (d['vis_sm'] or 0) >= 10 else d['vis_sm']} sm** · "
+                                        f"clouds **{d['clouds'] or '—'}**"
+                                        + (f" · **{d['wx']}**" if d['wx'] else ""))
+                            with st.expander("Raw METAR"):
+                                st.code(d["raw"], language=None, wrap_lines=True)
+                            continue
                         st.markdown(
                             f"- Wind **{d['wind_text']}**\n"
                             f"- Vis **{'10+' if (d['vis_sm'] or 0) >= 10 else d['vis_sm']} sm**\n"
@@ -629,11 +765,11 @@ with tab_live:
                     d = decode_metar(m) if m else {}
                     ap_pts.append({"ident": ap.ident, "lat": ap.lat, "lon": ap.lon,
                                    "cat": d.get("category", ""), "raw": d.get("raw", "")})
-                html_map = live_map_html(route_paths, ap_pts, advs, pireps, now)
+                html_map = live_map_html(route_paths, ap_pts, advs, pireps, now, height=380 if PHONE else 540)
                 if hasattr(st, "iframe"):
-                    st.iframe(html_map, height=560)
+                    st.iframe(html_map, height=400 if PHONE else 560)
                 else:
-                    components.html(html_map, height=560)
+                    components.html(html_map, height=400 if PHONE else 560)
                 st.caption("Radar is the live NEXRAD composite (updates about every 5 minutes). Click shapes and "
                            "dots for details; use the box at top right to turn layers on or off.")
 
@@ -647,7 +783,12 @@ with tab_live:
                         if hit:
                             on_route.append((a, lr.leg))
                             break
-                if on_route:
+                if on_route and PHONE:
+                    st.markdown("**Advisories along your route at your ETA**")
+                    for a, leg in on_route:
+                        until = ctx.local(a.valid_to).strftime("%-I:%M %p") if a.valid_to else "?"
+                        st.markdown(f"- **{a.kind} {a.hazard}** on {leg.dep.ident}-{leg.arr.ident}, until {until}")
+                elif on_route:
                     st.markdown("**Advisories along your route at your ETA**")
                     st.dataframe(pd.DataFrame([{
                         "Type": a.kind, "Hazard": a.hazard, "Leg": f"{leg.dep.ident}-{leg.arr.ident}",
@@ -665,7 +806,8 @@ with tab_live:
                         near.append((p, dmin))
                 if near:
                     st.markdown(f"**Pilot reports within 40 nm of your route (last 2 hours): {len(near)}**")
-                    st.dataframe(pd.DataFrame([{
+                    pirep_box = st.expander("Show pilot reports") if PHONE else st.container()
+                    pirep_box.dataframe(pd.DataFrame([{
                         "Time": ctx.local(p.time).strftime("%-I:%M %p") if p.time else "",
                         "Altitude": "" if p.alt_ft is None else f"{p.alt_ft:,.0f}", "Aircraft": p.aircraft,
                         "Turbulence": p.turb, "Icing": p.icing, "Urgent": "⚠️" if p.urgent else "",
@@ -686,6 +828,8 @@ with tab_live:
 # ---------------------------------------------------------------------------
 # Data status (sidebar) + footer
 # ---------------------------------------------------------------------------
+if status_box is None:
+    status_box = st.expander("🛰️ Data sources")
 with status_box:
     srcs = st.session_state.get("sources", {})
     if srcs:
