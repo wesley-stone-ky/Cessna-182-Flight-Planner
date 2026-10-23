@@ -783,3 +783,12 @@ def test_can_i_fly_today_tomorrow_weekend(db, ac, mins):
     assert ans[0][1].verdict != NODATA and all(a.reason for _, a in ans)
     late = can_i_fly(ctx.forecast, db.get("KLEX"), mins, ctx.tz, evening)
     assert late[0][1].verdict == NODATA and "daylight" in late[0][1].reason
+
+def test_airports_are_nationwide_with_time_zones(db):
+    assert len(db.airports) > 4000
+    assert db.get("KLEX").tz == "America/New_York"
+    assert db.get("KBWG").tz == "America/Chicago"          # Bowling Green KY is Central
+    assert db.get("KPHX").tz == "America/Phoenix"          # no daylight saving time
+    assert db.get("KBOI").state == "ID" and db.get("KBOI").runways
+    with pytest.raises(KeyError, match="US public airports"):
+        db.get("KZZZ")
