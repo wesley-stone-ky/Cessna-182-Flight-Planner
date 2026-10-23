@@ -404,3 +404,34 @@ def test_nws_grid_parsing_and_merge_when_open_meteo_is_rate_limited(tmp_path, mo
     assert wspd == pytest.approx(25, abs=1) and 240 <= wdir <= 260           # transport wind used aloft
     # the Gulf point borrows the nearest grid instead of failing
     assert fc.at(27.5, -82.75, now) is not None
+
+
+def test_outlook_explains_itself_and_does_not_fail_partial_days(db, ac, mins):
+    from flightplanner.outlook import airport_outlook, route_outlook
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)[:2]
+    now = datetime.now(timezone.utc)
+    attach_terrain(plans, Terrain(session=_NoNet()), mins)
+    pts = forecast_points(plans) + [(a.lat, a.lon) for p in plans for a in p.airports]
+    # forecast that stops at ~10 AM local on day 5, like the end of the NWS grid
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo("America/New_York")
+    end_local = datetime.combine(now.astimezone(zone).date() + timedelta(days=5),
+                                 datetime.min.time(), zone) + timedelta(hours=10)
+    hours = int((end_local.astimezone(timezone.utc) - (now - timedelta(hours=1))).total_seconds() // 3600)
+    fc = synthetic_forecast(pts, start=now - timedelta(hours=1), days=8)
+    for k, srs in fc.series.items():
+        for name, arr in srs["hourly"].items():
+            srs["hourly"][name] = arr[:hours]
+    from flightplanner.weather import GridForecast
+    fc = GridForecast(fc.series)
+    rows = airport_outlook(fc, db.get("KLEX"), mins, days=7)
+    by_day = {r.day: r for r in rows}
+    partial = by_day[end_local.date()]
+    assert partial.verdict == "Partial", partial.verdict
+    assert any("only covers" in line for line in partial.reasons)
+    frontal = [r for r in rows if r.verdict == "Poor"]
+    assert frontal and any("Low ceilings" in l or "Gusty" in l for r in frontal for l in r.reasons)
+    assert all(r.reasons for r in rows)
+    rt = route_outlook(fc, plans[0].legs, mins, days=7)
+    bad = [r for r in rt if r["verdict"] == "Poor"]
+    assert bad and any("near K" in line for line in bad[0]["reasons"])

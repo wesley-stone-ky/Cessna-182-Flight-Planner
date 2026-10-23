@@ -64,7 +64,43 @@ if PHONE:
     </style>""", unsafe_allow_html=True)
 
 STATUS_ICON = {"GO": "🟢 GO", "MARGINAL": "🟡 MARGINAL", "NO-GO": "🔴 NO-GO"}
-VERDICT_ICON = {"Good": "🟢 Good", "Fair": "🟡 Fair", "Poor": "🔴 Poor", "No data": "⚪ No data"}
+VERDICT_ICON = {"Good": "🟢 Good", "Fair": "🟡 Fair", "Poor": "🔴 Poor", "No data": "⚪ No data",
+                "Partial": "⚪ Partial data"}
+RANK = {"Good": 0, "Fair": 1, "Poor": 2, "Partial": -1, "No data": -2}
+
+
+def judgement_note(day: date) -> str:
+    lead = (day - datetime.now(ZONE).date()).days
+    if lead <= 2:
+        return ("**How sure:** 0–2 days out. This is the NWS forecasters' grid, and inside ~30 hours the "
+                "Go / no-go tab adds TAFs. Fairly reliable.")
+    if lead <= 6:
+        return ("**How sure:** 3–6 days out. Good for the general picture (a front, a stormy afternoon), "
+                "but timing and ceilings often shift. Check again 2–3 days before.")
+    return ("**How sure:** a week or more out. This comes from one computer model with no forecaster review, and "
+            "ceilings are estimated. Treat it as a trend; a 'Poor' this far out often changes.")
+
+
+def why_block(day: date, route_row: dict | None, ap_rows: list[tuple[str, object]], show_hours: bool = True) -> None:
+    """Plain-English breakdown of what drives a day's verdict, so you can make your own call."""
+    if route_row is not None:
+        st.markdown(f"**En route: {VERDICT_ICON[route_row['verdict']]}**")
+        for line in route_row.get("reasons", []):
+            st.markdown(f"- {line}")
+    for ident, o in ap_rows:
+        st.markdown(f"**{ident}: {VERDICT_ICON[o.verdict]}** · {o.flyable_hours} of {o.covered_hours} forecast "
+                    f"daylight hours meet your minimums · best {o.best_window}")
+        for line in o.reasons:
+            st.markdown(f"- {line}")
+        if show_hours and o.hours:
+            st.dataframe(pd.DataFrame([{
+                "Time": h.time.strftime("%-I %p"), "OK?": "✅" if h.ok else "❌",
+                "Why not": "; ".join(t for _, t in h.problems) or "—",
+                "Ceiling": "none" if h.ceiling_ft is None else f"{round(h.ceiling_ft, -2):,.0f}",
+                "Vis": "—" if h.vis_sm is None else ("10+" if h.vis_sm >= 10 else f"{h.vis_sm:.1f}"),
+                "Wind": h.wind, "Rain %": f"{h.rain_pct:.0f}", "Storms": h.storms,
+                "Source": h.source} for h in o.hours]), hide_index=True, width="stretch")
+    st.info(judgement_note(day))
 CAT_BADGE = {"VFR": ":green-badge[VFR]", "MVFR": ":blue-badge[MVFR]", "IFR": ":red-badge[IFR]",
              "LIFR": ":violet-badge[LIFR]"}
 TZ = "America/New_York"
@@ -556,7 +592,7 @@ def outlook_table(rows):
         "Storms": o.storms,
         "Winds @6000": o.wind_6000,
         "Hi/Lo °F": "—" if o.hi_c is None else f"{o.hi_c * 9 / 5 + 32:.0f}/{o.lo_c * 9 / 5 + 32:.0f}",
-        "Summary": o.summary,
+        "Why": (o.reasons or [""])[0].split(" — ")[0][:110],
     } for o in rows])
 
 
@@ -582,8 +618,7 @@ with tab_outlook:
                         per_ap = [(ap.ident, outs[ap.ident][i]) for ap in aps]
                         if r_["verdict"] == "No data" and all(o.verdict == "No data" for _, o in per_ap):
                             continue
-                        worst = max([r_["verdict"]] + [o.verdict for _, o in per_ap],
-                                    key=lambda v: {"Good": 0, "Fair": 1, "Poor": 2, "No data": -1}[v])
+                        worst = max([r_["verdict"]] + [o.verdict for _, o in per_ap], key=lambda v: RANK[v])
                         with st.container(border=True):
                             st.markdown(f"**{VERDICT_ICON[worst]} · {r_['day']:%a %b %-d}**  \n"
                                         f"En route: {VERDICT_ICON[r_['verdict']]}"
@@ -591,6 +626,9 @@ with tab_outlook:
                             st.caption("  \n".join(
                                 f"{ident}: {VERDICT_ICON[o.verdict]} · best {o.best_window} · {o.summary}"
                                 for ident, o in per_ap))
+                            if worst != "Good":
+                                with st.expander("Why?"):
+                                    why_block(r_["day"], r_, per_ap, show_hours=False)
                     for ap in aps:
                         with st.expander(f"{ap.ident} hour by hour"):
                             rows = outs[ap.ident]
@@ -607,22 +645,32 @@ with tab_outlook:
                     "Worst cloud room over terrain": "—" if r_["ceiling_margin"] is None
                     else (f"{r_['ceiling_margin']:+,.0f} ft" if r_["ceiling_margin"] < 5000 else "plenty"),
                     "Max rain chance": "—" if r_["rain"] is None else f"{r_['rain']:.0f}%",
-                    "Storms": r_["storms"]} for r_ in rt]), hide_index=True, width="stretch")
+                    "Storms": r_["storms"],
+                    "Main issue": (r_.get("reasons") or [""])[0].split(" — ")[0][:110]} for r_ in rt]),
+                    hide_index=True, width="stretch")
                 st.caption("'Cloud room' = estimated cloud base minus (terrain + your clearance + 500 ft), "
                            "worst spot on the route at 10 AM, 1 PM and 4 PM. Negative means VFR won't fit there.")
-                shown = []
+                shown, all_rows = [], {}
                 for ap in [main.airports[0]] + main.stops + [main.airports[-1]]:
                     if ap.ident in shown:
                         continue
                     shown.append(ap.ident)
                     st.subheader(f"{ap.ident} — {ap.name}")
                     rows = airport_outlook(fc, ap, mins, TZ, days=10)
+                    all_rows[ap.ident] = rows
                     st.dataframe(outlook_table(rows), hide_index=True, width="stretch")
                     with st.expander(f"Hour by hour at {ap.ident}"):
                         dsel = st.selectbox("Day", [o.day for o in rows if o.verdict != "No data"],
                                             format_func=lambda d_: d_.strftime("%a %b %-d"), key=f"hr_{ap.ident}")
                         st.dataframe(pd.DataFrame(hourly_rows(fc, ap, dsel, TZ)), hide_index=True, width="stretch")
-                        st.caption("Ceilings and flight categories here are model estimates, not observations.")
+                        st.caption("Ceilings and flight categories here are forecasts, not observations.")
+                st.subheader("🔎 Why? Look at one day")
+                days_avail = [r_["day"] for r_ in rt]
+                default_i = next((i for i, r_ in enumerate(rt) if r_["verdict"] in ("Poor", "Fair")
+                                  or any(all_rows[k][i].verdict in ("Poor", "Fair") for k in all_rows)), 0)
+                wd = st.selectbox("Day", range(len(days_avail)), index=default_i,
+                                  format_func=lambda i: days_avail[i].strftime("%a %b %-d"), key="why_day")
+                why_block(days_avail[wd], rt[wd], [(k, v[wd]) for k, v in all_rows.items()])
         except StopIteration:
             pass
         except Exception as e:
