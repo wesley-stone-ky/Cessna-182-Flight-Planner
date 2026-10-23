@@ -46,6 +46,10 @@ legal weather briefing.
   The planner flies with the fuel the load allows (`wb_res.fuel_gal` → `ac.usable_gal`) and
   checks W&B at each takeoff and landing (`Finding.kind == "wb"`).
 
+- Day/night: `minimums.day_only` (UI "Night flying": Day or night / Land before dark). Night allowed is
+  the default; `_night_checks` in planner.py then adds the 45-min night reserve (91.151), a 61.57(b)
+  night-currency caution unless `night_current`, and a caution for night legs over terrain > 3,000 ft.
+
 ## Rules
 - Safety first: when unsure, make a check MORE conservative and say why in the finding text.
 - Keep the "screening only — get an official briefing" disclaimer in the UI and exports.

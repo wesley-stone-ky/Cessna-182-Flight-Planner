@@ -37,6 +37,7 @@ class Minimums:
     fuel_stop_ground_minutes: float = 45
     day_only: bool = True
     sunset_buffer_minutes: float = 30
+    night_current: bool = False
     min_runway_ft: float = 3000
     prefer_known_fuel_stops: bool = True
 
