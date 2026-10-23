@@ -1,6 +1,6 @@
 """Synthetic forecast for demos and tests (no network needed).
 
-Builds Open-Meteo-shaped data: mostly good weather, with a cold front that
+Builds GridForecast series (with full winds aloft): mostly good weather, with a cold front that
 crosses the route on day 3 (low ceilings, rain, thunderstorms in the south)
 and a gusty, post-frontal day 4.
 """

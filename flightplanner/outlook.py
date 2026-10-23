@@ -1,4 +1,4 @@
-"""10-day outlook: daily flyability per airport and along a route."""
+"""7-day outlook: daily flyability per airport and along a route."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -132,7 +132,7 @@ def _windows(flags: list[tuple[datetime, bool]]) -> str:
 
 
 def airport_outlook(fc: GridForecast, ap: Airport, mins: Minimums, tz: str = "America/New_York",
-                    days: int = 10, start: date | None = None) -> list[DayOutlook]:
+                    days: int = 7, start: date | None = None) -> list[DayOutlook]:
     zone = ZoneInfo(tz)
     start = start or datetime.now(zone).date()
     out = []
@@ -160,8 +160,7 @@ def airport_outlook(fc: GridForecast, ap: Airport, mins: Minimums, tz: str = "Am
         if not wxs:
             out.append(DayOutlook(day, "No data", 0, daylight, "—", None, None, 0, 0, 0, "—", None, None, "—", None,
                                   "Beyond the forecast range",
-                                  ["No forecast reaches this day yet (NWS covers 7 days; days 8–10 need the "
-                                   "Open-Meteo model, which may be unavailable)."]))
+                                  ["No forecast reaches this day yet (the NWS forecast covers 7 days)."]))
             continue
         cigs = [w.ceiling_agl_ft() for w in wxs if w.ceiling_agl_ft() is not None]
         viss = [w.vis_sm for w in wxs if w.vis_sm is not None]
@@ -192,7 +191,8 @@ def airport_outlook(fc: GridForecast, ap: Airport, mins: Minimums, tz: str = "Am
         out.append(DayOutlook(
             day, verdict, flyable, len(flags), _windows(flags), low_cig, min(viss) if viss else None,
             max(w.wind_kt for w in wxs), gust, rain, storm_lvl,
-            max(temps) if temps else None, min(temps) if temps else None, f"{wd:03.0f}@{ws:.0f}",
+            max(temps) if temps else None, min(temps) if temps else None,
+            f"{wd:03.0f}@{ws:.0f}" + (" (est.)" if mid.aloft_estimated else ""),
             min(fz) if fz else None, ", ".join(bits) or "no significant weather",
             explain_hours(checks, daylight, mins) or ["Every forecast daylight hour meets your airport minimums."],
             {"NWS"} == {c.source for c in checks} and "NWS forecast" or
@@ -238,7 +238,7 @@ def hourly_rows(fc: GridForecast, ap: Airport, day: date, tz: str = "America/New
 
 
 def route_outlook(fc: GridForecast, legs, mins: Minimums, tz: str = "America/New_York",
-                  days: int = 10, start: date | None = None) -> list[dict]:
+                  days: int = 7, start: date | None = None) -> list[dict]:
     """Worst midday (10 AM–4 PM) en-route conditions per day along a route."""
     zone = ZoneInfo(tz)
     start = start or datetime.now(zone).date()

@@ -299,37 +299,6 @@ def test_live_map_escapes_text():
     assert "nexrad" in html and "leaflet" in html
 
 
-def test_forecast_request_is_light_and_handles_rate_limit(tmp_path, monkeypatch):
-    import flightplanner.weather as w
-    monkeypatch.setattr(w, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(w.time, "sleep", lambda s: None)
-    calls = []
-
-    class R:
-        status_code = 429
-        headers = {"Retry-After": "1"}
-        content = b"x"
-
-    class S:
-        def get(self, url, params=None, timeout=None, headers=None):
-            calls.append(params)
-            return R()
-
-    db = AirportDB.load()
-    ac, mins = Aircraft.load(), load_minimums()
-    plans = candidate_plans(db, db.get("KLEX"), db.get("KSPG"), ac, mins)[:4]
-    pts = forecast_points(plans) + [(a.lat, a.lon) for p in plans for a in p.airports]
-    with pytest.raises(w.RateLimited):
-        w.fetch_model_forecast(pts, session=S())
-    p0 = calls[0]
-    n_vars = len(p0["hourly"].split(","))
-    n_pts = len(p0["latitude"].split(","))
-    assert n_vars <= 30, n_vars                 # <= 3 "calls" per location on Open-Meteo's meter
-    assert n_pts <= 50, n_pts
-    assert p0["forecast_days"] == 10
-    assert len(calls) == 3                      # retried politely, then gave up
-
-
 def _nws_props(t0_iso: str):
     """A realistic api.weather.gov gridpoint 'properties' block (trimmed)."""
     def layer(uom, vals):
@@ -355,15 +324,13 @@ def _nws_props(t0_iso: str):
     }
 
 
-def test_nws_grid_parsing_and_merge_when_open_meteo_is_rate_limited(tmp_path, monkeypatch):
+def test_nws_grid_parsing(tmp_path, monkeypatch):
     import flightplanner.nws as nws
     import flightplanner.weather as w
     monkeypatch.setattr(w, "CACHE_DIR", tmp_path)
     monkeypatch.setattr(nws, "CACHE_DIR", tmp_path)
     monkeypatch.setattr(nws, "_POINTS_FILE", tmp_path / "pts.json")
-    monkeypatch.setattr(w.time, "sleep", lambda s: None)
     monkeypatch.setattr(nws.time, "sleep", lambda s: None)
-    monkeypatch.setattr(w, "_OM_BLOCKED_UNTIL", 0.0)
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     t0 = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:00:00+00:00")
     # make the second interval start 3 h after t0
@@ -382,8 +349,6 @@ def test_nws_grid_parsing_and_merge_when_open_meteo_is_rate_limited(tmp_path, mo
 
     class Sess:
         def get(self, url, params=None, timeout=None, headers=None):
-            if "open-meteo" in url:
-                return Resp(429)
             if "/points/27.5" in url:            # a point over the Gulf: NWS has no grid there
                 return Resp(404)
             if "/points/" in url:
@@ -392,7 +357,7 @@ def test_nws_grid_parsing_and_merge_when_open_meteo_is_rate_limited(tmp_path, mo
 
     fc, status = w.fetch_forecast([(38.0, -84.5), (27.5, -82.75)], session=Sess())
     assert status["NWS forecast (weather.gov)"].ok and status["NWS forecast (weather.gov)"].count == 1
-    assert not status["Open-Meteo (winds aloft, days 8-10)"].ok
+    assert list(status) == ["NWS forecast (weather.gov)"]
     wx = fc.at(38.0, -84.5, now)
     assert wx.nws and wx.ceiling_agl_ft() == pytest.approx(984, abs=2)       # 300 m ceiling
     assert wx.vis_sm == pytest.approx(2.0, abs=0.05)
@@ -402,6 +367,8 @@ def test_nws_grid_parsing_and_merge_when_open_meteo_is_rate_limited(tmp_path, mo
     assert later.ceiling_agl_ft() is None and later.vis_sm > 9                # clears up
     wdir, wspd, _, _ = later.wind_at(6000)
     assert wspd == pytest.approx(25, abs=1) and 240 <= wdir <= 260           # transport wind used aloft
+    assert later.aloft_estimated
+    assert later.freezing_level_ft == pytest.approx(984 + 18 * 500, abs=5)   # 18 C at 2 C/1,000 ft above 300 m
     # the Gulf point borrows the nearest grid instead of failing
     assert fc.at(27.5, -82.75, now) is not None
 
@@ -547,3 +514,116 @@ def test_wb_problems_become_no_go_findings(db, mins):
     dep = datetime(day.year, day.month, day.day, 9, tzinfo=ZoneInfo(ctx.tz)).astimezone(timezone.utc)
     r = evaluate_plan(ctx, plans[0], dep)
     assert r.status == "NO-GO" and any(f.kind == "wb" for f in r.findings)
+
+
+# --- NWS-only forecast: no winds or humidity aloft ------------------------------
+def _nws_only(ctx, sky=None):
+    """Mark the synthetic forecast the way NWS grids are: winds/temps aloft are estimates."""
+    for ser in ctx.forecast.series.values():
+        n = len(ser["hourly"]["time"])
+        ser["hourly"]["aloft_estimated"] = [1] * n
+        if sky is not None:
+            ser["hourly"]["sky_cover"] = [sky] * n
+    ctx.forecast._cache.clear()
+    return ctx
+
+
+def _morning(ctx, days=1, hour=8):
+    from zoneinfo import ZoneInfo
+    day = ctx.local(ctx.now).date() + timedelta(days=days)
+    return datetime(day.year, day.month, day.day, hour, 0, tzinfo=ZoneInfo(ctx.tz)).astimezone(timezone.utc)
+
+
+def test_estimated_winds_aloft_get_no_tailwind_credit(db, ac, mins):
+    # KLEX -> KGGE flies south-east; the synthetic 250-degree winds aloft are a tailwind there.
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)
+    ctx = _ctx(db, ac, mins, plans)
+    dep = _morning(ctx)
+    with_winds = evaluate_plan(ctx, plans[0], dep).legs[0]
+    est = evaluate_plan(_nws_only(ctx), plans[0], dep).legs[0]
+    tas = ac.ktas(est.alt_ft)
+    assert est.avg_gs_kt <= tas - mins.planning_headwind_kt + 0.5
+    assert est.minutes >= with_winds.minutes
+    assert any(f.kind == "winds" and f.level == "INFO" for f in est.findings)
+
+
+def test_estimated_icing_flags_cold_cloudy_altitudes(db, ac, mins):
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)
+    ctx = _ctx(db, ac, mins, plans)
+    dep = _morning(ctx)
+    cloudy = evaluate_plan(_nws_only(ctx, sky=90), plans[0], dep)
+    assert any(f.kind == "ice" and "humidity aloft" in f.text for f in cloudy.findings)
+    clear = evaluate_plan(_nws_only(ctx, sky=10), plans[0], dep)
+    assert not any(f.kind == "ice" for f in clear.findings)
+
+
+def test_terrain_tiles_decode_and_pad(monkeypatch):
+    import io as _io
+    from PIL import Image
+    from flightplanner import terrain as T
+    monkeypatch.setattr(T, "_CACHE_FILE", T.CACHE_DIR / "_test_terrain_cache.json")
+    # Terrarium encoding: meters = R*256 + G + B/256 - 32768; 1,000 m everywhere
+    v = 1000 + 32768
+    img = Image.new("RGB", (256, 256), (v // 256, v % 256, 0))
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+
+    class Resp:
+        content = buf.getvalue()
+        def raise_for_status(self):
+            pass
+
+    class Sess:
+        calls = 0
+        def get(self, url, **k):
+            Sess.calls += 1
+            assert "/terrarium/10/" in url
+            return Resp()
+
+    t = T.Terrain(session=Sess())
+    t.cache = {}
+    (e,) = t.elevations([(38.04, -84.61)])
+    assert e == pytest.approx(1000 * T.M_TO_FT + T.PEAK_PAD_FT, abs=0.5)
+    assert not t.used_fallback and Sess.calls >= 1
+    T._CACHE_FILE.unlink(missing_ok=True)
+
+
+def test_terrain_falls_back_conservatively_offline():
+    from flightplanner import terrain as T
+    t = T.Terrain(session=_NoNet())
+    t.cache = {}
+    (e,) = t.elevations([(35.76, -82.26)])           # Mt. Mitchell area
+    assert t.used_fallback and e >= 6684
+
+
+# --- weekend email --------------------------------------------------------------
+def test_weekend_days():
+    from flightplanner.weekend import weekend_days
+    thu, fri, sat, sun = date(2026, 10, 22), date(2026, 10, 23), date(2026, 10, 24), date(2026, 10, 25)
+    assert weekend_days(thu) == [fri, sat, sun]
+    assert weekend_days(fri) == [sat, sun]
+    assert weekend_days(sat) == [sun]
+    assert weekend_days(sun) == [date(2026, 10, 30), date(2026, 10, 31), date(2026, 11, 1)]
+
+
+def test_weekend_email_verdicts_and_disclaimer(db, ac, mins):
+    from flightplanner.weekend import DISCLAIMER, GO, MARGINAL, NODATA, NOGO, render_html, render_text, \
+        subject, weekend_for
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)[:1]
+    ctx = _ctx(db, ac, mins, plans)
+    today = ctx.local(ctx.now).date()
+    wk = weekend_for(ctx.forecast, db.get("KLEX"), mins, ctx.tz, today)
+    assert wk.days and all(d.verdict in (GO, MARGINAL, NOGO, NODATA) for d in wk.days)
+    assert all(d.reason for d in wk.days)
+    txt, html = render_text([wk], mins), render_html([wk], mins)
+    assert DISCLAIMER in txt and "Screening only" in html and "reply STOP" in html
+    assert subject([wk]).startswith("Weekend flying at KLEX: ")
+
+
+def test_weekend_email_says_no_data_past_the_forecast(db, ac, mins):
+    from flightplanner.weekend import NODATA, weekend_for
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)[:1]
+    ctx = _ctx(db, ac, mins, plans)
+    far = ctx.local(ctx.now).date() + timedelta(days=20)
+    wk = weekend_for(ctx.forecast, db.get("KLEX"), mins, ctx.tz, far)
+    assert all(d.verdict == NODATA for d in wk.days)
