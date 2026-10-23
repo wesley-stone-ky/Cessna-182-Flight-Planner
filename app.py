@@ -62,14 +62,19 @@ def get_terrain() -> Terrain:
     return Terrain()
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+def _om_key() -> str | None:
+    """Optional paid Open-Meteo key (Streamlit secret or env var OPEN_METEO_API_KEY)."""
+    import os
+    try:
+        return st.secrets.get("OPEN_METEO_API_KEY") or os.environ.get("OPEN_METEO_API_KEY")
+    except Exception:
+        return os.environ.get("OPEN_METEO_API_KEY")
+
+
+@st.cache_data(ttl=1200, show_spinner=False)
 def get_model_forecast(points: tuple[tuple[float, float], ...]):
-    return fetch_model_forecast(points, ttl_s=1800)
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def get_model_forecast_live(points: tuple[tuple[float, float], ...]):
-    return fetch_model_forecast(points, ttl_s=600)
+    # One shared forecast per route (all tabs), refreshed every 20 minutes.
+    return fetch_model_forecast(points, days=10, ttl_s=1200, api_key=_om_key())
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -139,7 +144,7 @@ db = get_db()
 @st.cache_data(show_spinner=False)
 def get_plans(dep_ident: str, dest_ident: str, settings_key: tuple):
     dep, dest = db.get(dep_ident), db.get(dest_ident)
-    plans = candidate_plans(db, dep, dest, ac, mins)
+    plans = candidate_plans(db, dep, dest, ac, mins)[:4]   # nonstop (if possible) + best stop options
     terrain = get_terrain()
     attach_terrain(plans, terrain, mins)
     return plans, terrain.used_fallback
@@ -150,15 +155,15 @@ def plans_for(dep_ident: str, dest_ident: str):
     return get_plans(dep_ident, dest_ident, key)
 
 
-def forecast_for(plans, live: bool = False):
+def forecast_for(plans):
     pts = forecast_points(plans) + [(a.lat, a.lon) for p in plans for a in p.airports]
     now = datetime.now(timezone.utc)
     if demo:
         note_source("Model forecast (Open-Meteo)", True, "DEMO data")
-        return synthetic_forecast(pts, start=now - timedelta(hours=1), days=16)
+        return synthetic_forecast(pts, start=now - timedelta(hours=1), days=10)
     key = tuple(sorted({(round(a, 3), round(b, 3)) for a, b in pts}))
     try:
-        fc = (get_model_forecast_live if live else get_model_forecast)(key)
+        fc = get_model_forecast(key)
         note_source("Model forecast (Open-Meteo)", True,
                     f"{len(fc.series)} grid points, through {fc.horizon.astimezone(ZONE):%a %b %-d}"
                     if fc.horizon else "")
@@ -172,6 +177,16 @@ def as_range(w) -> tuple[date, date]:
     if isinstance(w, (list, tuple)):
         return (w[0], w[-1]) if len(w) > 1 else (w[0], w[0])
     return w, w
+
+
+def friendly(e: Exception) -> str:
+    msg = str(e)
+    if "429" in msg or "rate-limit" in msg:
+        return ("The free weather service is busy (rate limit). Wait a minute, then click again. "
+                "This clears up on its own.")
+    if "HTTPSConnectionPool" in msg or "Connection" in msg or "timed out" in msg:
+        return "Couldn't reach the weather service right now. Check back in a minute."
+    return msg[:300]
 
 
 def ago(dt: datetime | None) -> str:
@@ -209,7 +224,7 @@ with c2:
 
 valid_pair = True
 try:
-    db.get(dep_id), db.get(dest_id)
+    _ = (db.get(dep_id), db.get(dest_id))
 except KeyError as e:
     st.error(str(e).strip('"'))
     valid_pair = False
@@ -399,7 +414,7 @@ with tab_plan:
     c3, c4 = st.columns([2, 2])
     with c3:
         window = st.date_input("Days you could leave", (today + timedelta(days=1), today + timedelta(days=7)),
-                               min_value=today, max_value=today + timedelta(days=15), format="MM/DD/YYYY")
+                               min_value=today, max_value=today + timedelta(days=9), format="MM/DD/YYYY")
     with c4:
         hours = st.slider("Departure window (local time)", 5, 19, (8, 13), format="%d:00")
     ret = st.checkbox("Plan the trip home too")
@@ -408,7 +423,7 @@ with tab_plan:
         with c5:
             ret_window = st.date_input("Days you could come home",
                                        (today + timedelta(days=4), today + timedelta(days=11)),
-                                       min_value=today, max_value=today + timedelta(days=15),
+                                       min_value=today, max_value=today + timedelta(days=9),
                                        format="MM/DD/YYYY", key="retwin")
         with c6:
             ret_hours = st.slider("Return departure window", 5, 19, (9, 14), format="%d:00", key="rethrs")
@@ -421,8 +436,7 @@ with tab_plan:
                     out["back"] = run_direction(dest_id, dep_id, ret_window, ret_hours)
             st.session_state["results"] = out
         except Exception as e:
-            st.error(f"Something went wrong: {e}")
-            st.info("The weather service may be busy or unreachable. Wait a minute and try again.")
+            st.error(friendly(e))
 
     results = st.session_state.get("results")
     if results:
@@ -461,7 +475,7 @@ with tab_outlook:
         try:
             plans, _ = plans_for(dep_id, dest_id)
             if plans:
-                fc = forecast_for(plans[:3])
+                fc = forecast_for(plans)
                 main = plans[0]
                 rt = route_outlook(fc, main.legs, mins, TZ, days=10)
                 st.subheader(f"Along the route: {main.route_string} ({main.label})")
@@ -487,8 +501,7 @@ with tab_outlook:
                         st.dataframe(pd.DataFrame(hourly_rows(fc, ap, dsel, TZ)), hide_index=True, width="stretch")
                         st.caption("Ceilings and flight categories here are model estimates, not observations.")
         except Exception as e:
-            st.error(f"Couldn't load the outlook: {e}")
-            st.info("The weather service may be busy or unreachable. Wait a minute and try again.")
+            st.error(f"Couldn't load the outlook. {friendly(e)}")
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +530,7 @@ with tab_live:
             with r1:
                 if st.button("🔄 Refresh live data", width="stretch"):
                     get_awc.clear()
-                    get_model_forecast_live.clear()
+                    get_model_forecast.clear()
             with r2:
                 auto = st.toggle("Auto-refresh every 5 minutes", False, key="live_auto")
 
@@ -536,9 +549,9 @@ with tab_live:
                     dep_time = now + timedelta(minutes=offs[when_opt] + 1)
 
                 try:
-                    fc = forecast_for([plan], live=True)
+                    fc = forecast_for(plans)
                 except Exception as e:
-                    st.error(f"Couldn't get the model forecast: {e}")
+                    st.error(f"Couldn't get the forecast. {friendly(e)}")
                     return
                 if demo:
                     metars, tafs, advs, pireps, status, fetched = {}, {}, [], [], {}, now

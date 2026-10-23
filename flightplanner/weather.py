@@ -23,20 +23,24 @@ from .geo import point_in_polygon
 
 USER_AGENT = "c182-trip-planner/0.1 (personal flight planning; github)"
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_CUSTOMER_URL = "https://customer-api.open-meteo.com/v1/forecast"
 AWC_BASE = "https://aviationweather.gov/api/data"
 
-LEVELS_HPA = (925, 850, 700, 600)
+# Keep the variable count small: Open-Meteo counts every 10 variables per
+# location as one more API call, and Streamlit Cloud shares its IP address
+# with many other apps, so heavy requests get rate-limited (HTTP 429).
+LEVELS_HPA = (925, 850, 700)   # ~2,500 / 5,000 / 10,000 ft
 SURFACE_VARS = (
     "temperature_2m", "dew_point_2m", "cloud_cover_low", "cloud_cover_mid", "visibility",
-    "precipitation_probability", "precipitation", "weather_code", "cape",
+    "precipitation_probability", "weather_code", "cape",
     "freezing_level_height", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
 )
 LEVEL_VARS = ("wind_speed", "wind_direction", "temperature", "relative_humidity", "geopotential_height")
 # Cloud cover on pressure levels gives a much better cloud-base estimate than
 # surface fields alone. ~975 hPa is ~1,000 ft MSL, 700 hPa ~10,000 ft.
-CLOUD_LEVELS_HPA = (975, 950, 925, 900, 850, 800, 700)
+CLOUD_LEVELS_HPA = (925, 850, 700)
 
-GRID = 0.25  # degrees; route points are snapped to this grid to share forecasts
+GRID = 0.5  # degrees (~30 nm); route points are snapped to this grid to share forecasts
 M_TO_FT = 3.28084
 THUNDER_CODES = {95, 96, 99}
 WMO_TEXT = {
@@ -274,8 +278,29 @@ def _cache_put(key: str, data) -> None:
         pass
 
 
-def fetch_model_forecast(points: Iterable[tuple[float, float]], days: int = 16,
-                         session: requests.Session | None = None, ttl_s: int = 3600) -> GridForecast:
+def _om_get(sess, url: str, params: dict) -> requests.Response:
+    """GET with polite retries on HTTP 429 (rate limit) and 5xx."""
+    r = None
+    for attempt in range(3):
+        r = sess.get(url, params=params, timeout=60, headers={"User-Agent": USER_AGENT})
+        if r.status_code not in (429, 500, 502, 503, 504):
+            return r
+        wait = 3 * (attempt + 1)
+        try:
+            wait = min(15, max(wait, int(r.headers.get("Retry-After", wait))))
+        except ValueError:
+            pass
+        time.sleep(wait)
+    return r
+
+
+class RateLimited(RuntimeError):
+    pass
+
+
+def fetch_model_forecast(points: Iterable[tuple[float, float]], days: int = 10,
+                         session: requests.Session | None = None, ttl_s: int = 3600,
+                         api_key: str | None = None) -> GridForecast:
     keys = sorted({snap(la, lo) for la, lo in points})
     hourly = list(SURFACE_VARS) + [f"{v}_{p}hPa" for p in LEVELS_HPA for v in LEVEL_VARS]
     for p in CLOUD_LEVELS_HPA:
@@ -283,10 +308,11 @@ def fetch_model_forecast(points: Iterable[tuple[float, float]], days: int = 16,
             name = f"{v}_{p}hPa"
             if name not in hourly:
                 hourly.append(name)
+    url = OPEN_METEO_CUSTOMER_URL if api_key else OPEN_METEO_URL
     sess = session or requests.Session()
     series: dict[tuple[float, float], dict] = {}
-    for start in range(0, len(keys), 25):
-        chunk = keys[start:start + 25]
+    for start in range(0, len(keys), 50):
+        chunk = keys[start:start + 50]
         params = {
             "latitude": ",".join(f"{k[0]:.3f}" for k in chunk),
             "longitude": ",".join(f"{k[1]:.3f}" for k in chunk),
@@ -296,16 +322,21 @@ def fetch_model_forecast(points: Iterable[tuple[float, float]], days: int = 16,
             "timezone": "GMT",
             "timeformat": "unixtime",
         }
-        ck = "om_" + hashlib.sha1(json.dumps(params, sort_keys=True).encode()).hexdigest()[:16]
+        if api_key:
+            params["apikey"] = api_key
+        ck = "om_" + hashlib.sha1(json.dumps({k: v for k, v in params.items() if k != "apikey"},
+                                             sort_keys=True).encode()).hexdigest()[:16]
         data = _cache_get(ck, ttl_s)
         if data is None:
-            r = sess.get(OPEN_METEO_URL, params=params, timeout=60, headers={"User-Agent": USER_AGENT})
+            r = _om_get(sess, url, params)
+            if r.status_code == 429:
+                raise RateLimited("The free weather service (Open-Meteo) is rate-limiting this server right now. "
+                                  "Wait a minute and try again.")
             if r.status_code == 400:
                 # A variable the API doesn't know about shouldn't take the whole app down:
                 # retry with only the core surface + wind fields.
                 core = list(SURFACE_VARS) + [f"{v}_{p}hPa" for p in LEVELS_HPA for v in LEVEL_VARS]
-                r = sess.get(OPEN_METEO_URL, params=dict(params, hourly=",".join(core)), timeout=60,
-                             headers={"User-Agent": USER_AGENT})
+                r = _om_get(sess, url, dict(params, hourly=",".join(core)))
             r.raise_for_status()
             data = r.json()
             _cache_put(ck, data)

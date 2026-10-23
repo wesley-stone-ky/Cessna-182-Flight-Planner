@@ -62,6 +62,8 @@ def synthetic_forecast(points, start: datetime | None = None, days: int = 10, se
             h["wind_direction_10m"].append(wdir_sfc)
             h["wind_gusts_10m"].append(round(gust, 1))
             for p, z, base_spd in ((925, 760, 15), (850, 1500, 20), (700, 3100, 28), (600, 4300, 35)):
+                if p not in LEVELS_HPA:
+                    continue
                 h[f"wind_speed_{p}hPa"].append(round(base_spd + 10 * f + 15 * post, 1))
                 h[f"wind_direction_{p}hPa"].append(250 if day < front_center else 310)
                 h[f"temperature_{p}hPa"].append(round(temp - (z - elev_m) * 0.0065, 1))

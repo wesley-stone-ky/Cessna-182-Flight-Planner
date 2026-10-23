@@ -297,3 +297,34 @@ def test_live_map_escapes_text():
                          datetime.now(timezone.utc))
     assert "<script>x</script>" not in html and "</script><b>" not in html
     assert "nexrad" in html and "leaflet" in html
+
+
+def test_forecast_request_is_light_and_handles_rate_limit(tmp_path, monkeypatch):
+    import flightplanner.weather as w
+    monkeypatch.setattr(w, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(w.time, "sleep", lambda s: None)
+    calls = []
+
+    class R:
+        status_code = 429
+        headers = {"Retry-After": "1"}
+        content = b"x"
+
+    class S:
+        def get(self, url, params=None, timeout=None, headers=None):
+            calls.append(params)
+            return R()
+
+    db = AirportDB.load()
+    ac, mins = Aircraft.load(), load_minimums()
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KSPG"), ac, mins)[:4]
+    pts = forecast_points(plans) + [(a.lat, a.lon) for p in plans for a in p.airports]
+    with pytest.raises(w.RateLimited):
+        w.fetch_model_forecast(pts, session=S())
+    p0 = calls[0]
+    n_vars = len(p0["hourly"].split(","))
+    n_pts = len(p0["latitude"].split(","))
+    assert n_vars <= 30, n_vars                 # <= 3 "calls" per location on Open-Meteo's meter
+    assert n_pts <= 50, n_pts
+    assert p0["forecast_days"] == 10
+    assert len(calls) == 3                      # retried politely, then gave up
