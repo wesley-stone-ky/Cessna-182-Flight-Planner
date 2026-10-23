@@ -215,9 +215,7 @@ Refresh the airport data occasionally with `python scripts/build_airport_data.py
 ## Ideas for next steps (good Claude Code tasks)
 
 - Add an IFR mode that checks approach minimums and alternates (91.169) for when you're current.
-- Pull fuel prices and availability for stop candidates.
 - Add a "send to my copilot" email/text summary.
-- Add weight & balance for you, your copilot and bags.
 
 ## Weekend email
 

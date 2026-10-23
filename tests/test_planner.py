@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import xml.dom.minidom
+from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -837,3 +838,73 @@ def test_night_reserve_is_at_least_45_minutes(db, ac):
     day_mins = load_minimums({"day_only": False, "night_current": True, "reserve_minutes": 30})
     ctx2, r2 = _evening_plan(db, ac, day_mins, "KGGE", 9)              # same rules, daytime
     assert r2.legs[-1].reserve_required_gal == pytest.approx(30 / 60 * ac.cruise_gph, rel=0.01)
+
+
+# --- fuel availability (FAA NASR) ---------------------------------------------
+def _nasr_zip(rows_base, rows_att):
+    import csv as _csv, io as _io, zipfile as _zip
+    def to_csv(rows):
+        buf = _io.StringIO()
+        w = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+        w.writeheader(); w.writerows(rows)
+        return buf.getvalue()
+    out = _io.BytesIO()
+    with _zip.ZipFile(out, "w") as z:
+        z.writestr("APT_BASE.csv", to_csv(rows_base))
+        z.writestr("APT_ATT.csv", to_csv(rows_att))
+    return out.getvalue()
+
+
+def _base(site, arpt, icao, fuel, use="PU", typ="A"):
+    return {"EFF_DATE": "2026/10/01", "SITE_NO": site, "SITE_TYPE_CODE": typ, "STATE_CODE": "GA",
+            "ARPT_ID": arpt, "ICAO_ID": icao, "FACILITY_USE_CODE": use, "FUEL_TYPES": fuel}
+
+
+def test_build_fuel_data_parses_nasr(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bfd", Path(__file__).parents[1] / "scripts" / "build_fuel_data.py")
+    bfd = importlib.util.module_from_spec(spec); spec.loader.exec_module(bfd)
+    z = _nasr_zip([_base("1.", "MCN", "KMCN", "100LL,A"), _base("2.", "GA9", "", ""),
+                   _base("3.", "PVT", "", "100LL", use="PR"), _base("4.", "HEL", "", "", typ="H")],
+                  [{"SITE_NO": "1.", "SKED_SEQ_NO": "1", "MONTH": "ALL", "DAY": "ALL", "HOUR": "0600-2200"}])
+    rows = bfd.build_rows(z)
+    assert [r["ident"] for r in rows] == ["GA9", "KMCN"]          # private + heliport dropped
+    mcn = next(r for r in rows if r["ident"] == "KMCN")
+    assert mcn["fuel_types"] == "100LL,A" and "0600-2200" in mcn["attendance"]
+    from datetime import date as _d
+    assert bfd.cycle_dates(_d(2026, 10, 28))[0] == _d(2026, 10, 1)
+    assert bfd.cycle_dates(_d(2026, 10, 29))[0] == _d(2026, 10, 29)
+    assert bfd.cycle_url(_d(2026, 10, 1)).endswith("/01_Oct_2026_APT_CSV.zip")
+
+
+def test_stops_skip_airports_without_avgas(db, ac, mins, monkeypatch, tmp_path):
+    import flightplanner.fuel as fuel
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KSPG"), ac, mins)
+    stops = {s.ident for p in plans for s in p.stops}
+    assert stops
+    banned = sorted(stops)[0]
+    f = tmp_path / "fuel.csv"
+    lines = ["ident,faa_id,fuel_types,attendance,eff_date"]
+    for ap in db.airports.values():
+        lines.append(f"{ap.ident},{ap.ident[1:] if ap.ident.startswith('K') else ap.ident},"
+                     f"{'A' if ap.ident == banned else '100LL'},,2026/10/01")
+    f.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(fuel, "FUEL_FILE", f)
+    fuel.load_fuel.cache_clear()
+    try:
+        assert db.get(banned).avgas is False and db.get("KLEX").avgas is True
+        plans2 = candidate_plans(db, db.get("KLEX"), db.get("KSPG"), ac, mins)
+        assert banned not in {s.ident for p in plans2 for s in p.stops}
+    finally:
+        fuel.load_fuel.cache_clear()
+
+
+def test_fuel_unknown_without_data(monkeypatch, tmp_path):
+    import flightplanner.fuel as fuel
+    monkeypatch.setattr(fuel, "FUEL_FILE", tmp_path / "missing.csv")
+    fuel.load_fuel.cache_clear()
+    try:
+        assert fuel.avgas_status("KMCN") is None
+        assert AirportDB.load().get("KMCN").known_fuel is True       # falls back to the built-in list
+    finally:
+        fuel.load_fuel.cache_clear()
