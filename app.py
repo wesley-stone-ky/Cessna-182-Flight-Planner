@@ -13,10 +13,43 @@ import zipfile
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import importlib
+import sys
+from pathlib import Path
+
+
+def _reload_stale_modules() -> None:
+    """Streamlit Cloud re-runs app.py after a git push but can keep OLD copies of
+    our flightplanner modules in memory, leaving new screens talking to old code
+    ("'DayOutlook' object has no attribute ..."). If any module file changed
+    since it was imported, reload them all in dependency order."""
+    pkg_dir = Path(__file__).parent / "flightplanner"
+    stamp = tuple(sorted((f.name, f.stat().st_mtime_ns) for f in pkg_dir.glob("*.py")))
+    pkg = sys.modules.get("flightplanner")
+    if pkg is None or getattr(pkg, "_source_stamp", None) == stamp:
+        if pkg is not None:
+            return
+        import flightplanner as pkg  # first import
+        pkg._source_stamp = stamp
+        return
+    for name in ("config", "geo", "sun", "airports", "aircraft", "weather", "nws", "terrain",
+                 "planner", "outlook", "export", "livemap", "demo"):
+        mod = sys.modules.get(f"flightplanner.{name}")
+        if mod is not None:
+            importlib.reload(mod)
+    pkg._source_stamp = stamp
+    try:
+        st.cache_resource.clear()   # cached objects were built from the old classes
+    except Exception:
+        pass
+
+
+import streamlit as st  # noqa: E402  (needed by the reload helper)
+_reload_stale_modules()
+
 import altair as alt
 import pandas as pd
 import pydeck as pdk
-import streamlit as st
 import streamlit.components.v1 as components
 
 from flightplanner.aircraft import Aircraft
@@ -88,11 +121,12 @@ def why_block(day: date, route_row: dict | None, ap_rows: list[tuple[str, object
         for line in route_row.get("reasons", []):
             st.markdown(f"- {line}")
     for ident, o in ap_rows:
-        st.markdown(f"**{ident}: {VERDICT_ICON[o.verdict]}** · {o.flyable_hours} of {o.covered_hours} forecast "
-                    f"daylight hours meet your minimums · best {o.best_window}")
-        for line in o.reasons:
+        covered = getattr(o, "covered_hours", o.daylight_hours)
+        st.markdown(f"**{ident}: {VERDICT_ICON.get(o.verdict, o.verdict)}** · {o.flyable_hours} of {covered} "
+                    f"forecast daylight hours meet your minimums · best {o.best_window}")
+        for line in getattr(o, "reasons", []):
             st.markdown(f"- {line}")
-        if show_hours and o.hours:
+        if show_hours and getattr(o, "hours", None):
             st.dataframe(pd.DataFrame([{
                 "Time": h.time.strftime("%-I %p"), "OK?": "✅" if h.ok else "❌",
                 "Why not": "; ".join(t for _, t in h.problems) or "—",
