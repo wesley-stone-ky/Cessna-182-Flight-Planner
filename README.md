@@ -142,6 +142,11 @@ With 75 gal usable and a 1-hour reserve, **KLEX → St. Pete (≈625 nm)** is ri
 and well past a 3.5-hour leg, so the app plans one fuel stop. **KLEX → Georgetown (≈385 nm)** is nonstop
 with a comfortable margin.
 
+**Weight & balance:** fill in `weight_balance.empty_weight_lb` and `empty_arm_in` from the airplane's
+latest weight & balance record, then set `empty_is_example: false`. Limits come from FAA TCDS 3A13
+(Model 182R); check the station arms against POH Section 6. The ⚖️ Load section in the sidebar (phone:
+in ⚙️ settings) checks weight, CG and baggage limits, and the planner only takes the fuel your load allows.
+
 `config/minimums.yaml` holds your personal minimums. Everything in it can also be adjusted from the
 sidebar.
 

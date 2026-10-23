@@ -64,6 +64,7 @@ from flightplanner.planner import (NOGO, CAUTION, Context, attach_terrain, candi
                                    forecast_points, route_weather_rows, search_days)
 from flightplanner.terrain import Terrain
 from flightplanner.weather import AviationWeather, decode_metar, fetch_forecast
+from flightplanner.wb import Loading, WeightBalance
 
 st.set_page_config(page_title="C182 Planner", page_icon="✈️", layout="wide")
 
@@ -235,6 +236,47 @@ with settings_parent:
     day_only = st.checkbox("Daylight only", base_mins.day_only)
     ground = st.slider("Time on the ground at a fuel stop (min)", 20, 120, int(base_mins.fuel_stop_ground_minutes), 5)
 
+    st.header("⚖️ Load")
+    wb_calc = WeightBalance(usable_gal=usable)
+    wl1, wl2 = (st.container(), st.container()) if PHONE else st.columns(2)
+    with wl1:
+        w_front = st.number_input("Pilot + front seat (lb)", 0, 600, 340, 5,
+                                  help="Both front seats together, with clothes.")
+        w_bag_a = st.number_input("Bags behind rear seat, area A (lb)", 0, 200, 30, 5,
+                                  help="Max 120 lb in area A; 200 lb total baggage.")
+    with wl2:
+        w_rear = st.number_input("Rear seats (lb)", 0, 500, 0, 5)
+        w_bag_b = st.number_input("Bags far aft, area B (lb)", 0, 120, 0, 5, help="Max 80 lb in area B.")
+    fuel_mode = st.radio("Fuel at takeoff", ["Full (or as much as weight allows)", "Custom"], horizontal=False)
+    w_fuel = None
+    if fuel_mode == "Custom":
+        w_fuel = st.number_input("Gallons at takeoff", 5.0, float(usable), float(min(usable, 60.0)), 1.0)
+    loading = Loading(front_lb=w_front, rear_lb=w_rear, bag_a_lb=w_bag_a, bag_b_lb=w_bag_b, fuel_gal=w_fuel)
+    wb_res = wb_calc.evaluate(loading, burn_gal=0.0)
+    to_pt, zf_pt = wb_res.points[0], wb_res.points[2]
+    if all(lv != "NO-GO" or t.startswith("Landing") for lv, t in wb_res.problems):
+        st.success(f"Takeoff {to_pt.weight_lb:,.0f} lb · CG {to_pt.cg_in:.1f} in · {wb_res.fuel_gal:.0f} gal")
+    for level, text in wb_res.problems:
+        if text.startswith("Landing"):
+            continue   # landing weight/CG is checked per leg, after that leg's fuel burn
+        (st.error if level == "NO-GO" else st.info)(text)
+    if wb_res.example_empty:
+        st.warning("Using an EXAMPLE empty weight. Put the airplane's real empty weight and CG "
+                   "(from its weight & balance record) in `config/aircraft.yaml`.")
+    env = wb_calc.envelope_polygon()
+    chart_pts = pd.DataFrame([{"CG (in)": p.cg_in, "Weight (lb)": p.weight_lb, "Point": p.label}
+                              for p in wb_res.points])
+    env_df = pd.DataFrame([{"CG (in)": a, "Weight (lb)": w, "i": i} for i, (a, w) in enumerate(env + [env[0]])])
+    st.altair_chart(
+        (alt.Chart(env_df).mark_line(color="#38bdf8").encode(
+            x=alt.X("CG (in):Q", scale=alt.Scale(domain=[30, 50])),
+            y=alt.Y("Weight (lb):Q", scale=alt.Scale(domain=[1700, 3200])), order="i:Q")
+         + alt.Chart(chart_pts).mark_point(filled=True, size=90).encode(
+            x="CG (in):Q", y="Weight (lb):Q", color=alt.Color("Point:N", legend=alt.Legend(orient="bottom")),
+            tooltip=["Point", "Weight (lb)", "CG (in)"])).properties(height=220),
+        width="stretch")
+    st.caption("Blue outline = allowed CG range (FAA TCDS 3A13, Model 182R). Each leg is also checked at landing.")
+
     # Offline demo forecast is for development only: add ?demo=1 to the URL to use it.
     demo = st.query_params.get("demo") == "1"
     if not PHONE:
@@ -247,7 +289,8 @@ with settings_parent:
         status_box = None
         st.caption("🖥️ [Desktop view](?view=desktop)")
 
-ac = Aircraft.load(cruise_setting=setting, overrides={"fuel.usable_gal": usable})
+# The planner flies with the fuel your load allows (may be less than full tanks).
+ac = Aircraft.load(cruise_setting=setting, overrides={"fuel.usable_gal": round(wb_res.fuel_gal, 1)})
 mins = load_minimums({
     "flight_rules": rules, "airport_min_ceiling_ft_agl": cig, "airport_min_vis_sm": vis,
     "max_crosswind_kt": xw, "reserve_minutes": reserve, "max_leg_hours": max_leg,
@@ -266,7 +309,7 @@ def get_plans(dep_ident: str, dest_ident: str, settings_key: tuple):
 
 
 def plans_for(dep_ident: str, dest_ident: str):
-    key = (usable, setting, reserve, max_leg, rules, cig, vis, xw, day_only)
+    key = (round(wb_res.fuel_gal, 1), setting, reserve, max_leg, rules, cig, vis, xw, day_only)
     return get_plans(dep_ident, dest_ident, key)
 
 
@@ -439,7 +482,8 @@ def plan_detail(ctx, r, key: str):
     metric_grid([("Verdict", STATUS_ICON[r.status]), ("Leave", ctx.local(r.dep_time).strftime("%-I:%M %p")),
                  ("Arrive", ctx.local(r.arr_time).strftime("%-I:%M %p")),
                  ("Flying time", f"{r.flight_hours:.1f} h"), ("Fuel stops", str(len(r.plan.stops)))])
-    st.caption(f"Forecast confidence: **{r.confidence}** · {r.plan.total_nm:.0f} nm total")
+    st.caption(f"Forecast confidence: **{r.confidence}** · {r.plan.total_nm:.0f} nm total · "
+               f"{ac.usable_gal:.0f} gal at each takeoff")
     findings_block(r)
 
     if PHONE:
@@ -529,7 +573,8 @@ def run_direction(dep_ident: str, dest_ident: str, win, hrs):
             notes.append("No TAF at some airports, so the nearest one is used: " + "; ".join(borrowed))
     if fallback:
         notes.append("Couldn't reach the terrain service; using conservative built-in terrain heights.")
-    ctx = Context(ac, mins, fc, db, tafs=tafs, advisories=advs, tz=TZ, now=now)
+    ctx = Context(ac, mins, fc, db, tafs=tafs, advisories=advs, tz=TZ, now=now,
+                  wb=wb_calc, loading=loading)
     start, end = as_range(win)
     days = search_days(ctx, plans, start, end, hrs[0], hrs[1])
     return dict(ctx=ctx, plans=plans, days=days, notes=notes, dep=db.get(dep_ident), dest=db.get(dest_ident))
@@ -584,7 +629,7 @@ with tab_plan:
         c5, c6 = st.columns([2, 2])
         with c5:
             ret_window = st.date_input("Days you could come home",
-                                       (today + timedelta(days=4), today + timedelta(days=11)),
+                                       (today + timedelta(days=3), today + timedelta(days=9)),
                                        min_value=today, max_value=today + timedelta(days=9),
                                        format="MM/DD/YYYY", key="retwin")
         with c6:
@@ -783,7 +828,8 @@ with tab_live:
                     for k, v in status.items():
                         note_source(k, v[0], f"{v[2]} items" if v[0] else v[3])
 
-                ctx = Context(ac, mins, fc, db, tafs=tafs, advisories=advs, tz=TZ, now=now)
+                ctx = Context(ac, mins, fc, db, tafs=tafs, advisories=advs, tz=TZ, now=now,
+                  wb=wb_calc, loading=loading)
                 r = evaluate_plan(ctx, plan, dep_time)
 
                 st.markdown(f"#### If you leave at {ctx.local(dep_time):%-I:%M %p}: {STATUS_ICON[r.status]}")

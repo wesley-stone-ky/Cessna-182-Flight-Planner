@@ -64,3 +64,31 @@ limits:
   max_demonstrated_crosswind_kt: 15   # C182 POH demonstrated crosswind (not a limitation)
   service_ceiling_ft: 18100
   max_planning_alt_ft: 10500           # no supplemental O2 planned (14 CFR 91.211)
+
+# ---------------------------------------------------------------------------
+# Weight & balance — 1985 C182R. Limits from FAA Type Certificate Data Sheet
+# 3A13 (Model 182R): max 3,100 lb takeoff, 2,950 lb landing; C.G. range
+# forward +33.0 in at 2,250 lb or less, straight line to +40.9 in at 3,100 lb;
+# aft +46.0 in at all weights. Datum: front face of the firewall.
+# Station arms are typical 182R POH Section 6 values.
+# >>> VERIFY every arm against YOUR POH Section 6 loading graph, and put in
+# >>> the airplane's actual empty weight and moment from its latest
+# >>> Weight & Balance record (it includes unusable fuel and full oil).
+# ---------------------------------------------------------------------------
+weight_balance:
+  empty_weight_lb: 1850        # EXAMPLE ONLY — replace with the airplane's W&B record
+  empty_arm_in: 37.5           # EXAMPLE ONLY — empty CG (moment / weight)
+  empty_is_example: true       # set to false once the two lines above are real
+  max_takeoff_lb: 3100
+  max_landing_lb: 2950
+  fuel_lb_per_gal: 6.0
+  fuel_arm_in: 46.5            # VERIFY (POH Section 6)
+  stations:
+    front_seats: {arm_in: 37.0}                     # pilot + front passenger (adjustable 32-50)
+    rear_seats:  {arm_in: 74.0}
+    baggage_a:   {arm_in: 97.0,  max_lb: 120}
+    baggage_b:   {arm_in: 116.0, max_lb: 80}
+  baggage_total_max_lb: 200
+  cg_envelope:
+    forward: [[2250, 33.0], [3100, 40.9]]          # (weight lb, arm in), straight line between
+    aft:     [[2250, 46.0], [3100, 46.0]]
