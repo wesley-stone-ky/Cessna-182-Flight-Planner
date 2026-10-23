@@ -20,6 +20,8 @@ class Minimums:
     max_crosswind_kt: float = 12
     max_gust_kt: float = 25
     max_surface_wind_kt: float = 25
+    max_gust_spread_kt: float = 15
+    wind_window_minutes: float = 60
     enroute_min_vis_sm: float = 5
     terrain_clearance_ft: float = 1000
     mountain_terrain_clearance_ft: float = 2000

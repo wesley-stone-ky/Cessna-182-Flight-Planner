@@ -118,6 +118,9 @@ class AirportWx:
     best_runway: str = ""
     crosswind_kt: float | None = None
     headwind_kt: float | None = None
+    gust_spread_kt: float = 0.0
+    xwind_unchecked: str = ""      # why the crosswind could not be checked, if it couldn't
+    wind_window_min: float = 0     # wind values are the worst within +/- this many minutes
 
     def summary(self) -> str:
         cig = "no ceiling" if self.ceiling_ft is None else f"ceiling ~{int(round(self.ceiling_ft, -2)):,} ft"
@@ -126,9 +129,10 @@ class AirportWx:
         if self.wind_kt is not None:
             wd = "VRB" if self.wind_dir is None else f"{int(self.wind_dir):03d}"
             wind = f", wind {wd}@{self.wind_kt:.0f}" + (f"G{self.gust_kt:.0f}" if self.gust_kt and self.gust_kt > (self.wind_kt or 0) + 4 else "")
-        xw = f", rwy {self.best_runway} xwind {self.crosswind_kt:.0f} kt" if self.best_runway and self.crosswind_kt is not None else ""
+        xw = f", rwy {self.best_runway} xwind {self.crosswind_kt:.0f} kt incl. gusts" if self.best_runway and self.crosswind_kt is not None else ""
+        win = f", worst wind within ±{self.wind_window_min:.0f} min" if self.wind_window_min else ""
         wx = f", {self.wx}" if self.wx else ""
-        return f"{cig}, {vis}{wind}{xw}{wx} ({self.source})"
+        return f"{cig}, {vis}{wind}{xw}{wx} ({self.source}{win})"
 
 
 @dataclass
@@ -425,8 +429,6 @@ def _airport_wx(ctx: Context, ap: Airport, when: datetime) -> AirportWx | None:
             if tp.vis_sm is not None and (aw.vis_sm is None or tp.vis_sm < aw.vis_sm):
                 aw.vis_sm = tp.vis_sm
                 aw.source = src + " incl. TEMPO/PROB"
-            if tp.gust_kt and (aw.gust_kt or 0) < tp.gust_kt:
-                aw.gust_kt = tp.gust_kt
             if tp.wx and tp.wx not in aw.wx:
                 aw.wx = (aw.wx + " " + tp.wx).strip()
     else:
@@ -436,22 +438,73 @@ def _airport_wx(ctx: Context, ap: Airport, when: datetime) -> AirportWx | None:
         aw = AirportWx(ap.ident, when, "model est.", wx.ceiling_agl_ft(), wx.vis_sm,
                        wx.wind_dir, wx.wind_kt, wx.gust_kt,
                        wx.wx_text if wx.wcode >= 45 else "")
-    # best runway for the wind
-    if ap.runways and aw.wind_kt is not None and aw.wind_dir is not None and aw.wind_kt > 0:
-        best = None
-        for rw in ap.runways:
-            if rw.length_ft < 2500:
-                continue
-            head, cross = wind_components(rw.heading_true, aw.wind_dir, aw.wind_kt)
-            if head < -3:
-                continue
-            if best is None or cross < best[1]:
-                best = (rw.ident, cross, head)
-        if best:
-            aw.best_runway, aw.crosswind_kt, aw.headwind_kt = best
-    elif aw.wind_kt is not None:
-        aw.crosswind_kt = 0.0
+    _apply_worst_wind(ctx, ap, aw)
     return aw
+
+
+def _wind_samples(ctx: Context, ap: Airport, when: datetime) -> list[tuple[float | None, float, float]]:
+    """(dir, kt, gust) for every TAF group (incl. TEMPO/PROB) or model hour within the wind window.
+
+    Departures slip and arrivals run late, so a wind shift just after the ETA counts too."""
+    taf = ctx.tafs.get(ap.ident)
+    win = ctx.mins.wind_window_minutes
+    out = []
+    for k in range(-int(win // 30), int(win // 30) + 1):
+        t = when + timedelta(minutes=30 * k)
+        prevailing, temps = taf_at(taf, t) if taf else (None, [])
+        if prevailing is not None:
+            for p in [prevailing] + temps:
+                if p.wind_kt is not None:
+                    out.append((p.wind_dir, p.wind_kt, p.gust_kt or 0.0))
+        else:
+            wx = ctx.forecast.at(ap.lat, ap.lon, t)
+            if wx is not None:
+                out.append((wx.wind_dir, wx.wind_kt, wx.gust_kt or 0.0))
+    return out
+
+
+def _best_runway(ap: Airport, wdir: float | None, kt: float) -> tuple[str, float, float] | None:
+    """(runway, crosswind, headwind) with the least crosswind for a wind of `kt`.
+
+    Variable wind is treated as straight across. None = no runway >= 2500 ft without a tailwind."""
+    if kt <= 0:
+        return ("any", 0.0, 0.0)
+    if wdir is None:
+        return ("any", kt, 0.0)
+    best = None
+    for rw in ap.runways:
+        if rw.length_ft < 2500:
+            continue
+        head, cross = wind_components(rw.heading_true, wdir, kt)
+        if head < -3:
+            continue
+        if best is None or cross < best[1]:
+            best = (rw.ident, cross, head)
+    return best
+
+
+def _apply_worst_wind(ctx: Context, ap: Airport, aw: AirportWx) -> None:
+    """Replace aw's wind with the worst case in the window; crosswind uses the gust value."""
+    samples = _wind_samples(ctx, ap, aw.when)
+    if not samples:
+        return
+    aw.wind_window_min = ctx.mins.wind_window_minutes
+    aw.wind_kt = max(k for _, k, _ in samples)
+    aw.gust_kt = max(g for _, _, g in samples) or None
+    aw.gust_spread_kt = max((g - k for _, k, g in samples if g), default=0.0)
+    if not ap.runways:
+        aw.xwind_unchecked = "no runway data"
+        return
+    worst = None
+    for d, k, g in samples:
+        rw = _best_runway(ap, d, max(k, g))
+        if rw is None:
+            aw.xwind_unchecked = "no runway of 2,500 ft or more without a tailwind"
+            continue
+        if worst is None or rw[1] > worst[1]:
+            worst, aw.wind_dir = rw, d
+    if worst:
+        aw.best_runway, aw.crosswind_kt, aw.headwind_kt = worst
 
 
 def _check_airport(ctx: Context, aw: AirportWx | None, li: int, role: str, out: list[Finding]) -> None:
@@ -477,6 +530,12 @@ def _check_airport(ctx: Context, aw: AirportWx | None, li: int, role: str, out: 
         out.append(Finding(NOGO, li, where, f"{aw.ident} gusts {aw.gust_kt:.0f} kt", "wind"))
     elif aw.wind_kt and aw.wind_kt >= m.max_surface_wind_kt:
         out.append(Finding(CAUTION, li, where, f"{aw.ident} surface wind {aw.wind_kt:.0f} kt", "wind"))
+    if aw.gust_spread_kt >= m.max_gust_spread_kt:
+        out.append(Finding(CAUTION, li, where, f"{aw.ident} gusts {aw.gust_spread_kt:.0f} kt above the sustained "
+                           "wind: expect a bumpy, gusty final; add half the gust factor to approach speed", "wind"))
+    if aw.xwind_unchecked:
+        out.append(Finding(CAUTION, li, where, f"{aw.ident} crosswind not checked ({aw.xwind_unchecked}); "
+                           "work out the runway wind yourself", "xwind"))
     if aw.crosswind_kt is not None:
         if aw.crosswind_kt > ctx.ac.demo_xwind:
             out.append(Finding(NOGO, li, where, f"{aw.ident} crosswind {aw.crosswind_kt:.0f} kt exceeds the "
