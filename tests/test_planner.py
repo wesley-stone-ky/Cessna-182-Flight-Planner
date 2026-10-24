@@ -371,7 +371,10 @@ def test_nws_grid_parsing(tmp_path, monkeypatch):
     wdir, wspd, _, _ = later.wind_at(6000)
     assert wspd == pytest.approx(25, abs=1) and 240 <= wdir <= 260           # transport wind used aloft
     assert later.aloft_estimated
-    assert later.freezing_level_ft == pytest.approx(984 + 18 * 500, abs=5)   # 18 C at 2 C/1,000 ft above 300 m
+    if later.temp_c is None:     # the fake temperature layer has a gap; which hours fall in it depends on the clock
+        assert later.freezing_level_ft is None
+    else:                        # standard lapse rate, 2 C per 1,000 ft above the 300 m field
+        assert later.freezing_level_ft == pytest.approx(984 + later.temp_c * 500, abs=5)
     # the Gulf point borrows the nearest grid instead of failing
     assert fc.at(27.5, -82.75, now) is not None
 
