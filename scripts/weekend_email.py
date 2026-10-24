@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 from flightplanner.airports import AirportDB  # noqa: E402
 from flightplanner.config import load_minimums  # noqa: E402
 from flightplanner.mail import MailNotConfigured, send_messages  # noqa: E402
-from flightplanner.weather import fetch_forecast  # noqa: E402
+from flightplanner.weather import AviationWeather, fetch_forecast  # noqa: E402
 from flightplanner.weekend import render_html, render_text, subject, weekend_for  # noqa: E402
 
 def load_subscribers() -> list[dict]:
@@ -58,13 +58,13 @@ def subscribers_from_db(path: str, base_url: str) -> list[dict]:
              "unsubscribe": unsubscribe_url(base_url, u.id)} for u in Store(path).weekly_recipients()]
 
 
-def build(sub: dict, db: AirportDB, fc) -> EmailMessage:
+def build(sub: dict, db: AirportDB, fc, tafs: dict | None = None) -> EmailMessage:
     mins = sub.get("mins") or load_minimums(sub.get("minimums"))
     weekends = []
     for i in sub["airports"]:
         ap = db.get(i)
         tz = sub.get("tz") or ap.tz      # each airport's own daylight hours unless the subscriber says otherwise
-        weekends.append(weekend_for(fc, ap, mins, tz, datetime.now(ZoneInfo(tz)).date()))
+        weekends.append(weekend_for(fc, ap, mins, tz, datetime.now(ZoneInfo(tz)).date(), (tafs or {}).get(ap.ident)))
     msg = EmailMessage()
     msg["Subject"] = subject(weekends)
     msg["To"] = sub["email"]
@@ -108,7 +108,12 @@ def main() -> None:
         print(f"{name}: {'ok' if st.ok else 'FAILED'} ({st.count} points){' — ' + st.error if st.error else ''}")
         if not st.ok:
             sys.exit("Forecast unavailable; not sending.")
-    msgs = [build(s, db, fc) for s in subs]
+    try:   # Friday's TAF is out by Thursday evening; it can only make an answer more cautious
+        _, tafs = AviationWeather(ttl_s=600).for_airports(list(aps.values()), db.nearby)
+    except Exception as e:
+        print(f"TAFs unavailable ({e}); using the NWS grid only.")
+        tafs = {}
+    msgs = [build(s, db, fc, tafs) for s in subs]
     if args.dry_run:
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)

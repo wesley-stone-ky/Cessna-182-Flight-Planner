@@ -118,6 +118,21 @@ def create_app(db_path: str | None = None, forecast=None, send_mail=None, base_u
                 "didn't ask for this, ignore this email.</p>")
         mail(message(u.email, subject, text, html))
 
+    taf_cache: dict = {}
+
+    def home_taf(ap) -> dict | None:
+        """TAF for an airport (the nearest one within 40 nm if it has none), shared for 5 minutes."""
+        hit = taf_cache.get(ap.ident)
+        if hit and time.time() - hit[0] < 300:
+            return hit[1]
+        try:
+            tafs, _, _ = (aviation or official_products)([ap], airports)
+            taf = tafs.get(ap.ident)
+        except Exception:
+            taf = None
+        taf_cache[ap.ident] = (time.time(), taf)
+        return taf
+
     def type_choices() -> list[tuple[str, str]]:
         cat = catalog()
         return sorted(((t, cat[t].name) for t in cat), key=lambda x: x[1])
@@ -290,12 +305,16 @@ def create_app(db_path: str | None = None, forecast=None, send_mail=None, base_u
         ac = user_aircraft(u)
         try:
             fc = get_forecast([(ap.lat, ap.lon)])
-            answers = can_i_fly(fc, ap, mins, ap.tz, datetime.now(timezone.utc))
             error = None
         except Exception:
-            answers, error = [], ("We couldn't reach the National Weather Service just now. Try again in a few "
-                                  "minutes.")
-        return page(request, "home.html", user=u, ap=ap, mins=mins, ac=ac, answers=answers, error=error,
+            fc, error = None, ("We couldn't reach the National Weather Service just now. Try again in a few "
+                               "minutes.")
+        taf = home_taf(ap)
+        try:
+            answers = can_i_fly(fc, ap, mins, ap.tz, datetime.now(timezone.utc), taf=taf) if fc else []
+        except Exception:
+            answers, error = [], "Something went wrong working out the answer. Try again in a few minutes."
+        return page(request, "home.html", user=u, ap=ap, mins=mins, ac=ac, answers=answers, error=error, taf=taf,
                     style=VERDICT_STYLE, welcome=bool(welcome), preset=minimum_presets()[u.preset]["label"])
 
     # -- settings ----------------------------------------------------------

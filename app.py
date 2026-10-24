@@ -701,15 +701,20 @@ FLY_ICON = {GO: "🟢 GO", MARGINAL: "🟡 MARGINAL", NOGO: "🔴 NO-GO"}
 
 with tab_fly:
     st.caption("Today, tomorrow and the weekend at your airports, checked hour by hour against your airport "
-               "minimums (ceiling, visibility, wind, gusts, storms; daylight only). Same answer as the weekend email.")
+               "minimums (ceiling, visibility, crosswind incl. gusts, wind, storms; daylight only). Where a TAF "
+               "covers the hour, the worse of the TAF and the NWS forecast is used. Same answer as the weekend email.")
     if valid_pair:
         try:
             aps = [db.get(dep_id)] + ([db.get(dest_id)] if dest_id != dep_id else [])
             fc = forecast_at([(a.lat, a.lon) for a in aps])
+            fly_tafs = {} if demo else get_awc(tuple(sorted(a.ident for a in aps)))[1]
             now = datetime.now(timezone.utc)
             for ap in aps:
                 st.subheader(f"{ap.ident} — {ap.name}")
-                answers = can_i_fly(fc, ap, mins, ap.tz, now)
+                taf = fly_tafs.get(ap.ident)
+                if taf and taf.get("station") != ap.ident:
+                    st.caption(f"No TAF at {ap.ident}; using {taf['station']}'s, {taf.get('dist_nm', 0):.0f} nm away.")
+                answers = can_i_fly(fc, ap, mins, ap.tz, now, taf=taf)
                 cols = [st.container(border=True) for _ in answers] if PHONE else \
                     [c.container(border=True) for c in st.columns(len(answers))]
                 for col, (label, a) in zip(cols, answers):

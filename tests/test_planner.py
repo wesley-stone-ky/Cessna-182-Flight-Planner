@@ -929,3 +929,46 @@ def test_minimum_presets_stay_above_legal_floors():
 def test_airport_search_puts_the_obvious_one_first(db):
     assert db.search("lexington")[0].ident == "KLEX"
     assert db.search("klex")[0].ident == "KLEX" and db.search("spg")[0].ident == "KSPG"
+
+
+def _clear_skies(ctx, **over):
+    for ser in ctx.forecast.series.values():
+        h = ser["hourly"]
+        n = len(h["time"])
+        vals = dict(wind_direction_10m=40, wind_speed_10m=5, wind_gusts_10m=8, weather_code=0,
+                    precipitation_probability=0, cloud_cover_low=0, cloud_cover_mid=0, visibility=30000, cape=0)
+        vals.update(over)
+        for k, v in vals.items():
+            h[k] = [v] * n
+    ctx.forecast._cache.clear()
+
+
+def test_taf_can_only_make_the_daily_answer_more_cautious(db, ac, mins):
+    from zoneinfo import ZoneInfo
+    from flightplanner.weather import TafPeriod
+    from flightplanner.weekend import GO, NOGO, can_i_fly
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)[:1]
+    ctx = _ctx(db, ac, mins, plans)
+    _clear_skies(ctx)
+    zone = ZoneInfo(ctx.tz)
+    day = ctx.local(ctx.now).date() + timedelta(days=1)
+    t0 = datetime(day.year, day.month, day.day, 0, tzinfo=zone).astimezone(timezone.utc)
+    now = datetime(day.year, day.month, day.day, 7, tzinfo=zone).astimezone(timezone.utc)
+    ap = db.get("KLEX")
+    base = can_i_fly(ctx.forecast, ap, mins, ctx.tz, now)
+    assert base[0][1].verdict == GO
+    low = {"station": "KLEX", "periods": [TafPeriod(t0, t0 + timedelta(hours=30), "", 40, 5, None, 2.0, 700, "BR")]}
+    bad = can_i_fly(ctx.forecast, ap, mins, ctx.tz, now, taf=low)[0][1]
+    assert bad.verdict == NOGO and "TAF" in bad.reason
+    storms = {"station": "KLEX", "periods": [
+        TafPeriod(t0, t0 + timedelta(hours=30), "", 40, 5, None, 10.0, None, ""),
+        TafPeriod(t0 + timedelta(hours=10), t0 + timedelta(hours=20), "TEMPO", 270, 20, 35, 3.0, 2500, "TSRA")]}
+    from flightplanner.outlook import airport_outlook
+    assert can_i_fly(ctx.forecast, ap, mins, ctx.tz, now, taf=storms)[0][1].verdict == NOGO
+    tday = [o for o in airport_outlook(ctx.forecast, ap, mins, ctx.tz, days=3, taf=storms) if o.day == day][0]
+    kinds = {k for h in tday.hours for k, _ in h.problems}
+    assert {"storms", "gusts", "ceiling", "visibility"} <= kinds     # all from the TEMPO group (270 is down rwy 27)
+    # a clear TAF never rescues a bad NWS grid
+    _clear_skies(ctx, cloud_cover_low=95, visibility=1500)
+    clear = {"station": "KLEX", "periods": [TafPeriod(t0, t0 + timedelta(hours=30), "", 40, 5, None, 10.0, None, "")]}
+    assert can_i_fly(ctx.forecast, ap, mins, ctx.tz, now, taf=clear)[0][1].verdict == NOGO
