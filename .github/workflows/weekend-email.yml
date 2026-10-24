@@ -21,6 +21,8 @@ jobs:
   send:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,3 +39,15 @@ jobs:
           TEST_TO: ${{ inputs.to }}
           TEST_AIRPORT: ${{ inputs.airport }}
         run: python scripts/weekend_email.py
+      - name: Send to web app users
+        # Only once the web app is hosted (DATABASE_URL secret set), and not for one-off test sends.
+        if: ${{ env.DATABASE_URL != '' && inputs.to == '' }}
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM_NAME: ${{ vars.MAIL_FROM_NAME }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          BASE_URL: ${{ vars.BASE_URL }}
+        run: |
+          pip install "psycopg[binary]>=3.1"
+          python scripts/weekend_email.py --from-db "$DATABASE_URL"

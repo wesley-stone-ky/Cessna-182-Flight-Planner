@@ -248,3 +248,16 @@ Without `SMTP_USER` / `SMTP_PASSWORD` the sign-in emails are printed to the cons
 `WEB_DB` sets the database file (default `.cache/web.sqlite3`), `BASE_URL` the address used in links.
 The Thursday email can send to the web app's confirmed users with
 `python scripts/weekend_email.py --from-db .cache/web.sqlite3` (same `SECRET_KEY` and `BASE_URL`).
+
+### Hosting it for testers (free)
+
+1. **Database:** create a free Postgres at [neon.tech](https://neon.tech) and copy its connection string.
+2. **App:** at [render.com](https://render.com), New → Blueprint → this repo. `render.yaml` sets everything up.
+   Fill in `DATABASE_URL` (step 1), `BASE_URL` (the `https://….onrender.com` address Render gives you),
+   `SMTP_USER` and `SMTP_PASSWORD` (the Gmail sender). Render generates `SECRET_KEY`.
+3. **Thursday email for web users:** add GitHub repository secrets `DATABASE_URL` and `SECRET_KEY` (copy
+   Render's value) and a repository variable `BASE_URL`. The weekend-email workflow then also emails every
+   confirmed web user, with their own minimums and an unsubscribe link.
+
+The free Render instance sleeps after ~15 idle minutes (first page then takes ~30 s). Fine for testers;
+move to a paid instance before charging.
