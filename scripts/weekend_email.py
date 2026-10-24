@@ -8,6 +8,9 @@ Run from the repo root:
 Subscribers come from the SUBSCRIBERS_JSON environment variable (a GitHub
 secret, so addresses never land in the repo) or config/subscribers.json
 (git-ignored). See config/subscribers.example.json for the format.
+With --from-db PATH they come from the web app's database instead (confirmed
+emails only), each with its own minimums and an unsubscribe link; set
+BASE_URL and the same SECRET_KEY as the web app so those links work.
 
 Sending uses SMTP. For a Gmail sender: turn on 2-step verification, create an
 App Password, and set SMTP_USER / SMTP_PASSWORD. SMTP_HOST, SMTP_PORT,
@@ -20,11 +23,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import smtplib
 import sys
 from datetime import datetime
 from email.message import EmailMessage
-from email.utils import formataddr
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -33,6 +34,7 @@ sys.path.insert(0, str(ROOT))
 
 from flightplanner.airports import AirportDB  # noqa: E402
 from flightplanner.config import load_minimums  # noqa: E402
+from flightplanner.mail import MailNotConfigured, send_messages  # noqa: E402
 from flightplanner.weather import fetch_forecast  # noqa: E402
 from flightplanner.weekend import render_html, render_text, subject, weekend_for  # noqa: E402
 
@@ -48,8 +50,16 @@ def load_subscribers() -> list[dict]:
     return subs
 
 
+def subscribers_from_db(path: str, base_url: str) -> list[dict]:
+    from web.auth import unsubscribe_url
+    from web.db import Store
+    from web.pilot import user_minimums
+    return [{"email": u.email, "airports": [u.home_airport], "mins": user_minimums(u),
+             "unsubscribe": unsubscribe_url(base_url, u.id)} for u in Store(path).weekly_recipients()]
+
+
 def build(sub: dict, db: AirportDB, fc) -> EmailMessage:
-    mins = load_minimums(sub.get("minimums"))
+    mins = sub.get("mins") or load_minimums(sub.get("minimums"))
     weekends = []
     for i in sub["airports"]:
         ap = db.get(i)
@@ -58,25 +68,18 @@ def build(sub: dict, db: AirportDB, fc) -> EmailMessage:
     msg = EmailMessage()
     msg["Subject"] = subject(weekends)
     msg["To"] = sub["email"]
-    msg.set_content(render_text(weekends, mins))
-    msg.add_alternative(render_html(weekends, mins), subtype="html")
+    msg.set_content(render_text(weekends, mins, sub.get("unsubscribe")))
+    msg.add_alternative(render_html(weekends, mins, sub.get("unsubscribe")), subtype="html")
     return msg
 
 
 def send(msgs: list[EmailMessage]) -> None:
-    user, pw = os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASSWORD")
-    if not user or not pw:
-        sys.exit("SMTP_USER and SMTP_PASSWORD must be set to send (use --dry-run to preview instead).")
-    sender = formataddr((os.environ.get("MAIL_FROM_NAME") or "Weekend Flying Outlook",
-                         os.environ.get("MAIL_FROM") or user))
-    with smtplib.SMTP(os.environ.get("SMTP_HOST", "smtp.gmail.com"), int(os.environ.get("SMTP_PORT", "587")),
-                      timeout=30) as s:
-        s.starttls()
-        s.login(user, pw)
-        for m in msgs:
-            m["From"] = sender
-            s.send_message(m)
-            print(f"sent: {m['To']} — {m['Subject']}")
+    try:
+        send_messages(msgs)
+    except MailNotConfigured as e:
+        sys.exit(f"{e} (use --dry-run to preview instead).")
+    for m in msgs:
+        print(f"sent: {m['To']} — {m['Subject']}")
 
 
 def main() -> None:
@@ -84,10 +87,16 @@ def main() -> None:
     ap.add_argument("--to", default=os.environ.get("TEST_TO") or None, help="send one test email to this address")
     ap.add_argument("--airport", default=os.environ.get("TEST_AIRPORT") or "KLEX", help="airport for --to")
     ap.add_argument("--dry-run", action="store_true", help="write preview files instead of sending")
+    ap.add_argument("--from-db", help="send to the web app's confirmed users in this SQLite file")
     ap.add_argument("--out", default=str(ROOT / ".cache" / "weekend_preview"), help="preview folder for --dry-run")
     args = ap.parse_args()
 
-    subs = [{"email": args.to, "airports": [args.airport]}] if args.to else load_subscribers()
+    if args.to:
+        subs = [{"email": args.to, "airports": [args.airport]}]
+    elif args.from_db:
+        subs = subscribers_from_db(args.from_db, os.environ.get("BASE_URL", "http://localhost:8000"))
+    else:
+        subs = load_subscribers()
     if not subs:
         sys.exit("No subscribers: set SUBSCRIBERS_JSON, create config/subscribers.json, or pass --to.")
     db = AirportDB.load()

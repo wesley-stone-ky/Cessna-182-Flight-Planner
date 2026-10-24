@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block main %}
+{% include "_steps.html" %}
+<h1>What's your airplane's tail number?</h1>
+<p class="muted">We look it up in the FAA registry to find the make, model and year.</p>
+<form method="post" action="/start/plane" class="card">
+  <label>Tail number <input type="text" name="tail" value="{{ tail or '' }}" placeholder="N12345"
+         autocomplete="off" autocapitalize="characters" spellcheck="false" autofocus></label>
+  <button class="btn wide" type="submit">Look it up</button>
+</form>
+<form method="post" action="/start/plane" class="card">
+  <label>Or pick your airplane
+    <select name="type_id">
+      {% for tid, name in types %}<option value="{{ tid }}">{{ name }}</option>{% endfor %}
+    </select>
+  </label>
+  <input type="hidden" name="tail" value="{{ tail or '' }}">
+  <button class="btn secondary wide" type="submit">Use this airplane</button>
+</form>
+<form method="post" action="/start/plane"><input type="hidden" name="skip" value="1">
+  <button class="btn secondary wide" type="submit">Skip for now</button></form>
+<p class="small muted">The weekend answer works without an airplane. It's used for your crosswind limit and, later,
+trip planning.</p>
+{% endblock %}

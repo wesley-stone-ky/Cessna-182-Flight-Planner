@@ -232,3 +232,19 @@ Repository secrets it needs (Settings → Secrets and variables → Actions):
 | `SUBSCRIBERS_JSON` | the list, in the format of `config/subscribers.example.json` |
 
 Preview locally without sending: `python scripts/weekend_email.py --to you@example.com --dry-run`.
+
+## Web app (multi-user, in progress)
+
+`web/` is the multi-user version: three-question onboarding (tail number, home airport, how cautious),
+sign-in by emailed link (no passwords), "Can you fly?" for today / tomorrow / the weekend, settings,
+one-click unsubscribe. Plain HTML forms, large type, no JavaScript. Users live in SQLite for now.
+
+```bash
+pip install -r web/requirements.txt
+SECRET_KEY=change-me uvicorn web.app:create_app --factory --reload   # http://localhost:8000
+```
+
+Without `SMTP_USER` / `SMTP_PASSWORD` the sign-in emails are printed to the console instead of sent.
+`WEB_DB` sets the database file (default `.cache/web.sqlite3`), `BASE_URL` the address used in links.
+The Thursday email can send to the web app's confirmed users with
+`python scripts/weekend_email.py --from-db .cache/web.sqlite3` (same `SECRET_KEY` and `BASE_URL`).

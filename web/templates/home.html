@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block main %}
+{% if welcome %}<p class="notice">You're set up. We sent a link to <strong>{{ user.email }}</strong>; open it to start
+the Thursday email.</p>
+{% elif not user.verified %}<p class="notice">Open the link we emailed to <strong>{{ user.email }}</strong> to start the
+Thursday email.</p>{% endif %}
+<h1>Can you fly from {{ ap.ident }}?</h1>
+<p class="muted">{{ ap.name }}, {{ ap.city }}</p>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<div class="days">
+{% for label, a in answers %}
+  <section class="day {{ style.get(a.verdict, '') }}">
+    <span class="when">{{ label }}</span>
+    <span class="date">{{ a.day.strftime("%a %b %-d") }}</span>
+    <span class="pill">{{ a.verdict }}</span>
+    {% if a.window != "—" %}<span>Best <strong>{{ a.window }}</strong></span>{% endif %}
+    <span class="why">{{ a.reason }}</span>
+  </section>
+{% endfor %}
+</div>
+<div class="card">
+  <h2>Checked against</h2>
+  <dl class="facts">
+    <dt>Minimums</dt><dd>{{ preset }}</dd>
+    <dt>Ceiling</dt><dd>{{ "{:,.0f}".format(mins.airport_min_ceiling_ft_agl) }} ft</dd>
+    <dt>Visibility</dt><dd>{{ "{:.0f}".format(mins.airport_min_vis_sm) }} miles</dd>
+    <dt>Crosswind</dt><dd>{{ "{:.0f}".format(mins.max_crosswind_kt) }} kt, including gusts</dd>
+    <dt>Wind / gusts</dt><dd>{{ "{:.0f}".format(mins.max_surface_wind_kt) }} / {{ "{:.0f}".format(mins.max_gust_kt) }} kt</dd>
+    <dt>Airplane</dt><dd>{{ ac.raw.get("name") if ac else "Not set" }}</dd>
+  </dl>
+  <a class="btn secondary" href="/settings">Change these</a>
+</div>
+<p class="small muted">Forecast: National Weather Service 7-day grid, checked hour by hour in daylight. For today, also
+check the latest METAR and TAF.</p>
+{% endblock %}

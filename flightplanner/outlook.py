@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from .airports import Airport, AirportDB
+from .airports import Airport, AirportDB, best_runway
 from .config import Minimums
 from .sun import sun_times
 from .weather import GridForecast, WxPoint, flight_category
@@ -53,8 +53,10 @@ def source_of(wx: WxPoint) -> str:
     return "NWS" if wx.nws else "model"
 
 
-def check_hour(wx: WxPoint, mins: Minimums) -> list[tuple[str, str]]:
-    """Which of your airport minimums this hour breaks, with the numbers."""
+def check_hour(wx: WxPoint, mins: Minimums, ap: Airport | None = None) -> list[tuple[str, str]]:
+    """Which of your airport minimums this hour breaks, with the numbers.
+
+    With `ap`, also the crosswind on its best runway, using the gust value (same rule as the trip planner)."""
     out = []
     cig = wx.ceiling_agl_ft()
     if cig is not None and cig < mins.airport_min_ceiling_ft_agl:
@@ -65,6 +67,19 @@ def check_hour(wx: WxPoint, mins: Minimums) -> list[tuple[str, str]]:
         out.append(("gusts", f"gusts {wx.gust_kt:.0f} kt (limit {mins.max_gust_kt:.0f})"))
     elif wx.wind_kt >= mins.max_surface_wind_kt:
         out.append(("wind", f"wind {wx.wind_kt:.0f} kt (limit {mins.max_surface_wind_kt:.0f})"))
+    if ap is not None:
+        kt = max(wx.wind_kt, wx.gust_kt)
+        if not ap.runways:
+            if kt > mins.max_crosswind_kt:
+                out.append(("crosswind", f"wind {kt:.0f} kt and no runway data to check the crosswind"))
+        else:
+            rw = best_runway(ap, wx.wind_dir, kt)
+            if rw is None:
+                out.append(("crosswind", f"no runway of 2,500 ft or more without a tailwind (wind "
+                                         f"{wx.wind_dir:03.0f}@{kt:.0f})"))
+            elif rw[1] > mins.max_crosswind_kt:
+                out.append(("crosswind", f"crosswind {rw[1]:.0f} kt incl. gusts on rwy {rw[0]} "
+                                         f"(limit {mins.max_crosswind_kt:.0f})"))
     if wx.storm_level(mins.cape_caution_jkg, mins.cape_nogo_jkg) == "likely":
         out.append(("storms", f"thunderstorms likely ({wx.storm_detail()})"))
     return out
@@ -75,7 +90,7 @@ def _hour_ok(wx: WxPoint, mins: Minimums) -> bool:
 
 
 KIND_LABEL = {"ceiling": "Low ceilings", "visibility": "Low visibility", "gusts": "Gusty winds",
-              "wind": "Strong surface wind", "storms": "Thunderstorms"}
+              "wind": "Strong surface wind", "crosswind": "Crosswind", "storms": "Thunderstorms"}
 
 
 def _span(times: list[datetime]) -> str:
@@ -146,7 +161,7 @@ def airport_outlook(fc: GridForecast, ap: Airport, mins: Minimums, tz: str = "Am
             daylight += 1
             wx = fc.at(ap.lat, ap.lon, t.astimezone(timezone.utc))
             if wx is not None:
-                probs = check_hour(wx, mins)
+                probs = check_hour(wx, mins, ap)
                 wxs.append(wx)
                 flags.append((t, not probs))
                 checks.append(HourCheck(

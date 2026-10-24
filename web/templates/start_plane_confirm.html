@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block main %}
+{% include "_steps.html" %}
+<h1>Is this your airplane?</h1>
+<div class="card">
+  <p style="font-size:22px"><strong>{{ reg.n_number }}</strong>: {{ reg.description }}</p>
+  {% if reg.engine_note() %}<p class="notice">{{ reg.engine_note() }} You can do that in Settings.</p>{% endif %}
+  {% if match %}
+  <form method="post" action="/start/plane">
+    <input type="hidden" name="tail" value="{{ reg.n_number }}">
+    <input type="hidden" name="type_id" value="{{ reg.type_id }}">
+    <button class="btn wide" type="submit">Yes, that's it</button>
+  </form>
+  {% else %}
+  <p class="notice">That model isn't in our list yet. Pick the closest one below, or skip.</p>
+  {% endif %}
+</div>
+<form method="post" action="/start/plane" class="card">
+  <label>{% if match %}No, it's a different airplane{% else %}Closest airplane{% endif %}
+    <select name="type_id">
+      {% for tid, name in types %}<option value="{{ tid }}">{{ name }}</option>{% endfor %}
+    </select>
+  </label>
+  <input type="hidden" name="tail" value="{{ reg.n_number }}">
+  <button class="btn secondary wide" type="submit">Use this airplane</button>
+</form>
+<form method="post" action="/start/plane"><input type="hidden" name="skip" value="1">
+  <button class="btn secondary wide" type="submit">Skip for now</button></form>
+{% endblock %}

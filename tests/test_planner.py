@@ -719,28 +719,6 @@ def test_other_types_plan_a_trip(db, mins):
 
 
 # --- FAA registry lookup --------------------------------------------------------
-@pytest.fixture
-def fake_registry(tmp_path, monkeypatch):
-    import gzip as _gz
-    from flightplanner import registry as R
-    with _gz.open(tmp_path / "faa_aircraft.csv.gz", "wt") as f:
-        f.write("n_number,year,model_code,engine_code\n"
-                "1014F,1979,2072738,17026\n101SP,1986,2073020,41525\n2RX,2004,1150020,41540\n77AB,,9999999,\n")
-    (tmp_path / "faa_models.csv").write_text(
-        "code,mfr,model,type_acft,build_cert,engines,seats\n"
-        "2072738,CESSNA,172N,4,0,01,004\n2073020,CESSNA,182R,4,0,01,004\n"
-        "1150020,CIRRUS DESIGN CORP,SR22,4,0,01,004\n9999999,BEECH,58,5,0,02,006\n")
-    (tmp_path / "faa_engines.csv").write_text(
-        "code,mfr,model,hp\n17026,LYCOMING,0-320 SERIES,00180\n41525,CONT MOTOR,O-470 SERIES,00230\n"
-        "41540,CONT MOTOR,IO-550-N,00310\n")
-    monkeypatch.setattr(R, "DATA_DIR", tmp_path)
-    for fn in (R._models, R._engines, R.lookup):
-        fn.cache_clear()
-    yield R
-    for fn in (R._models, R._engines, R.lookup):
-        fn.cache_clear()
-
-
 def test_tail_number_lookup_matches_the_catalog(fake_registry):
     R = fake_registry
     assert R.normalize_n(" n101-sp ") == "101SP"
@@ -908,3 +886,46 @@ def test_fuel_unknown_without_data(monkeypatch, tmp_path):
         assert AirportDB.load().get("KMCN").known_fuel is True       # falls back to the built-in list
     finally:
         fuel.load_fuel.cache_clear()
+
+
+def test_daily_outlook_checks_crosswind_with_gusts(db, ac, mins):
+    from flightplanner.outlook import airport_outlook
+    from flightplanner.weekend import can_i_fly
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KGGE"), ac, mins)[:1]
+    ctx = _ctx(db, ac, mins, plans)
+    # 330@12G20 at KLEX: under the wind (25) and gust (25) limits, but ~18 kt across rwy 27 with the gust
+    for ser in ctx.forecast.series.values():
+        h = ser["hourly"]
+        n = len(h["time"])
+        h["wind_direction_10m"], h["wind_speed_10m"], h["wind_gusts_10m"] = [330] * n, [12] * n, [20] * n
+        h["weather_code"], h["precipitation_probability"], h["cloud_cover_low"] = [0] * n, [0] * n, [0] * n
+        h["cloud_cover_mid"], h["visibility"], h["cape"] = [0] * n, [30000] * n, [0] * n
+    ctx.forecast._cache.clear()
+    days = airport_outlook(ctx.forecast, db.get("KLEX"), mins, ctx.tz, days=3)
+    full = [d for d in days if d.covered_hours == d.daylight_hours][0]
+    assert full.verdict == "Poor" and full.reasons[0].startswith("Crosswind")
+    assert any("rwy 27" in t for h in full.hours for _, t in h.problems)
+    tomorrow = can_i_fly(ctx.forecast, db.get("KLEX"), mins, ctx.tz, _morning(ctx))[1][1]
+    assert tomorrow.verdict == "NO-GO" and "Crosswind" in tomorrow.reason
+
+
+def test_minimum_presets_stay_above_legal_floors():
+    from flightplanner.config import minimum_presets, preset_minimums
+    presets = minimum_presets()
+    assert list(presets) == ["cautious", "standard", "experienced"]
+    prev = None
+    for name in presets:
+        m = preset_minimums(name)
+        assert m.airport_min_ceiling_ft_agl >= 1000 and m.airport_min_vis_sm >= 3       # 14 CFR 91.155
+        assert m.reserve_minutes >= 30                                                    # 14 CFR 91.151
+        assert m.max_crosswind_kt <= 15                                                   # C182 demonstrated
+        if prev:   # each step is no stricter than the one before
+            assert m.airport_min_ceiling_ft_agl <= prev.airport_min_ceiling_ft_agl
+            assert m.max_crosswind_kt >= prev.max_crosswind_kt
+        prev = m
+    assert preset_minimums("cautious", {"max_crosswind_kt": 8}).max_crosswind_kt == 8
+
+
+def test_airport_search_puts_the_obvious_one_first(db):
+    assert db.search("lexington")[0].ident == "KLEX"
+    assert db.search("klex")[0].ident == "KLEX" and db.search("spg")[0].ident == "KSPG"

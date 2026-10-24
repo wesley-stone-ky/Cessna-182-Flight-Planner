@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 from .config import DATA_DIR
-from .geo import cross_along_track, haversine_nm
+from .geo import cross_along_track, haversine_nm, wind_components
 
 # Airports along the Ohio Valley -> Southeast corridors that are widely known to
 # sell 100LL (elsewhere in the US nothing is marked yet; fuel stops still work). Fuel availability and hours change: ALWAYS confirm on AirNav or
@@ -84,6 +84,26 @@ class Airport:
         return self.region.replace("US-", "")
 
 
+def best_runway(ap: Airport, wdir: float | None, kt: float) -> tuple[str, float, float] | None:
+    """(runway, crosswind, headwind) with the least crosswind for a wind of `kt`.
+
+    Variable wind is treated as straight across. None = no runway >= 2500 ft without a tailwind."""
+    if kt <= 0:
+        return ("any", 0.0, 0.0)
+    if wdir is None:
+        return ("any", kt, 0.0)
+    best = None
+    for rw in ap.runways:
+        if rw.length_ft < 2500:
+            continue
+        head, cross = wind_components(rw.heading_true, wdir, kt)
+        if head < -3:
+            continue
+        if best is None or cross < best[1]:
+            best = (rw.ident, cross, head)
+    return best
+
+
 class AirportDB:
     def __init__(self, airports: dict[str, Airport]):
         self.airports = airports
@@ -124,7 +144,10 @@ class AirportDB:
             return []
         hits = [a for a in self.airports.values()
                 if t in a.ident.lower() or t in a.name.lower() or t in a.city.lower()]
-        hits.sort(key=lambda a: (not a.ident.lower().startswith(t), a.ident))
+        size = {"large_airport": 0, "medium_airport": 1}
+        # Code matches first; then, for a town name, the bigger airports (what most people mean by "Lexington").
+        hits.sort(key=lambda a: (a.ident.lower() != t and a.ident.lower() != "k" + t,
+                                 not a.ident.lower().startswith(t), size.get(a.type, 2), -a.longest_rwy_ft, a.ident))
         return hits[:limit]
 
     def nearby(self, ap: Airport, max_nm: float = 40.0, limit: int = 8) -> list[tuple[str, float]]:

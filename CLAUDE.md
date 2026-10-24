@@ -35,6 +35,12 @@ legal weather briefing.
 - Terrain: AWS Terrain Tiles (terrain.py), with a conservative offline fallback.
 - Weekend email: `flightplanner/weekend.py` + `scripts/weekend_email.py`, run by
   `.github/workflows/weekend-email.yml`. Subscriber addresses live only in the SUBSCRIBERS_JSON secret.
+- Web app (multi-user): `web/` (FastAPI + Jinja, SQLite via `web/db.py`, signed tokens in `web/auth.py`,
+  `web/pilot.py` builds Minimums/Aircraft per user: onboarding preset from `config/minimum_presets.yaml`
+  + fine-tuning clamped to legal floors, crosswind capped at the airplane's demonstrated value).
+  Run: `uvicorn web.app:create_app --factory`. Tests in `tests/test_web.py` (offline).
+- Daily verdicts (`outlook.check_hour`, used by Can I fly? and the email) check gust-based crosswind on the
+  best runway, like the trip planner.
 - UI: `app.py` has 3 tabs (Trip planner, 7-day outlook, Before you go/live). Outlook logic is in
   `flightplanner/outlook.py`; the Leaflet live map (NEXRAD radar tiles from IEM, advisories, PIREPs) is in
   `flightplanner/livemap.py`.

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block main %}
+{% include "_steps.html" %}
+<h1>What's your home airport?</h1>
+<form method="post" action="/start/airport" class="card">
+  <label>Airport code or town <input type="text" name="q" value="{{ q or '' }}" placeholder="KLEX or Lexington"
+         autocomplete="off" autocapitalize="characters" spellcheck="false" autofocus></label>
+  <button class="btn wide" type="submit">Find it</button>
+</form>
+{% if hits %}
+<h2>{% if hits|length == 1 %}Is this it?{% else %}Which one?{% endif %}</h2>
+{% for a in hits %}
+<form method="post" action="/start/airport"><input type="hidden" name="confirm" value="{{ a.ident }}">
+  <button class="btn choice" type="submit"><span class="t">{{ a.ident }}: {{ a.name }}</span>
+    <span class="d">{{ a.city }}, {{ a.state }} · longest runway {{ "{:,}".format(a.longest_rwy_ft) }} ft</span></button>
+</form>
+{% endfor %}
+{% endif %}
+{% endblock %}

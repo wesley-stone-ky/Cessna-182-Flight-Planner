@@ -8,7 +8,7 @@ from functools import cached_property
 from zoneinfo import ZoneInfo
 
 from .aircraft import Aircraft
-from .airports import Airport, AirportDB
+from .airports import Airport, AirportDB, best_runway
 from .config import Minimums
 from .geo import (haversine_nm, initial_bearing, magnetic_variation, sample_line,
                   true_to_magnetic, wind_components, wind_triangle)
@@ -473,26 +473,6 @@ def _wind_samples(ctx: Context, ap: Airport, when: datetime) -> list[tuple[float
     return out
 
 
-def _best_runway(ap: Airport, wdir: float | None, kt: float) -> tuple[str, float, float] | None:
-    """(runway, crosswind, headwind) with the least crosswind for a wind of `kt`.
-
-    Variable wind is treated as straight across. None = no runway >= 2500 ft without a tailwind."""
-    if kt <= 0:
-        return ("any", 0.0, 0.0)
-    if wdir is None:
-        return ("any", kt, 0.0)
-    best = None
-    for rw in ap.runways:
-        if rw.length_ft < 2500:
-            continue
-        head, cross = wind_components(rw.heading_true, wdir, kt)
-        if head < -3:
-            continue
-        if best is None or cross < best[1]:
-            best = (rw.ident, cross, head)
-    return best
-
-
 def _apply_worst_wind(ctx: Context, ap: Airport, aw: AirportWx) -> None:
     """Replace aw's wind with the worst case in the window; crosswind uses the gust value."""
     samples = _wind_samples(ctx, ap, aw.when)
@@ -507,7 +487,7 @@ def _apply_worst_wind(ctx: Context, ap: Airport, aw: AirportWx) -> None:
         return
     worst = None
     for d, k, g in samples:
-        rw = _best_runway(ap, d, max(k, g))
+        rw = best_runway(ap, d, max(k, g))
         if rw is None:
             aw.xwind_unchecked = "no runway of 2,500 ft or more without a tailwind"
             continue

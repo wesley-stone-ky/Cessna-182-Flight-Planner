@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Settings</h1>
+{% if saved %}<p class="ok" role="status">Saved.</p>{% endif %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/settings">
+  <div class="card">
+    <h2>Home airport</h2>
+    <label>Airport code <input type="text" name="home_airport" value="{{ user.home_airport }}"
+           autocapitalize="characters" spellcheck="false"></label>
+  </div>
+  <div class="card">
+    <h2>Your minimums</h2>
+    <label>Starting point
+      <select name="preset">
+        {% for key, p in presets.items() %}<option value="{{ key }}" {% if key == user.preset %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+      </select>
+    </label>
+    <p class="small muted">Picking a different starting point resets the numbers below to that preset.</p>
+    {% for key, t in tunable.items() %}
+    <label>{{ t[0] }} ({{ t[1] }})
+      <input type="number" name="{{ key }}" value="{{ '%g' % mins[key] }}" min="{{ t[2] }}" max="{{ t[3] }}" step="{{ t[4] }}"></label>
+    {% endfor %}
+    <p class="small muted">Ceiling and visibility never go below the legal VFR floors (1,000 ft and 3 miles).
+    {% if ac %}Crosswind is capped at your airplane's demonstrated {{ "{:.0f}".format(ac.demo_xwind) }} kt.{% endif %}</p>
+  </div>
+  <div class="card">
+    <h2>Airplane</h2>
+    <label>Type
+      <select name="type_id">
+        <option value="" {% if not ac %}selected{% endif %}>Not set</option>
+        {% for tid, name in types %}<option value="{{ tid }}" {% if ac and ac.type_id == tid %}selected{% endif %}>{{ name }}</option>{% endfor %}
+      </select>
+    </label>
+    {% if user.aircraft.get("tail_number") %}<p class="muted small">Tail number {{ user.aircraft.tail_number }}</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>Email</h2>
+    <p>{{ user.email }}</p>
+    <label class="check"><input type="checkbox" name="weekly_email" value="1" {% if user.weekly_email %}checked{% endif %}>
+      <span>Send me "Can you fly this weekend?" every Thursday evening</span></label>
+  </div>
+  <button class="btn wide" type="submit">Save</button>
+</form>
+{% endblock %}
