@@ -33,6 +33,16 @@
       </select>
     </label>
     {% if user.aircraft.get("tail_number") %}<p class="muted small">Tail number {{ user.aircraft.tail_number }}</p>{% endif %}
+    {% if ac %}
+    <p class="small muted">The numbers below start as typical values for this type. Put in what your airplane
+    actually does; it matters most for trip planning.</p>
+    <label>Usable fuel (gallons, from the fuel selector placard)
+      <input type="number" name="usable_gal" value="{{ '%g' % ac.usable_gal }}" min="10" max="150" step="1"></label>
+    <label>Cruise speed at 6,000 ft (knots true, at {{ ac.cruise_setting }} power)
+      <input type="number" name="ktas_6000" value="{{ '%g' % ac.ktas(6000)|round(0) }}" min="60" max="250" step="1"></label>
+    <label>Fuel burn in cruise (gallons per hour)
+      <input type="number" name="gph" value="{{ '%g' % ac.cruise_gph }}" min="3" max="30" step="0.1"></label>
+    {% endif %}
   </div>
   <div class="card">
     <h2>Email</h2>

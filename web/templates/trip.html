@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Plan a trip from {{ user.home_airport }}</h1>
+<p class="muted">We try every departure time in your window, nonstop first, with fuel stops only when range,
+fatigue or weather needs them. {% if ac %}Planned for your {{ ac.raw.get("name") }} at {{ ac.cruise_setting }}
+power, {{ '%g' % ac.usable_gal }} gal usable.{% endif %}</p>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if not ac %}
+<div class="card"><p>Trip planning needs your airplane's speed, fuel burn and fuel.</p>
+  <a class="btn" href="/settings">Set your airplane</a></div>
+{% else %}
+<form method="post" action="/trip" class="card"
+      onsubmit="var b=this.querySelector('.btn');b.textContent='Checking every departure time…';b.disabled=true">
+  <label>Where to? <input type="text" name="dest" value="{{ dest }}" placeholder="KGGE or Georgetown"
+         autocapitalize="characters" spellcheck="false" {% if not result %}autofocus{% endif %}></label>
+  <div class="row">
+    <label>Earliest day <input type="date" name="start" value="{{ start }}" min="{{ today }}" max="{{ last_day }}"></label>
+    <label>Latest day <input type="date" name="end" value="{{ end }}" min="{{ today }}" max="{{ last_day }}"></label>
+  </div>
+  <div class="row">
+    <label>Leave no earlier than
+      <select name="earliest">{% for h in range(5, 20) %}<option value="{{ h }}" {% if h == earliest %}selected{% endif %}>{{ h if h <= 12 else h - 12 }} {{ "AM" if h < 12 else "PM" }}</option>{% endfor %}</select></label>
+    <label>and no later than
+      <select name="latest">{% for h in range(5, 20) %}<option value="{{ h }}" {% if h == latest %}selected{% endif %}>{{ h if h <= 12 else h - 12 }} {{ "AM" if h < 12 else "PM" }}</option>{% endfor %}</select></label>
+  </div>
+  <button class="btn wide" type="submit">Find the best days</button>
+</form>
+{% if hits %}
+<h2>Which airport?</h2>
+{% for a in hits %}
+<form method="post" action="/trip">
+  <input type="hidden" name="dest" value="{{ a.ident }}"><input type="hidden" name="start" value="{{ start }}">
+  <input type="hidden" name="end" value="{{ end }}"><input type="hidden" name="earliest" value="{{ earliest }}">
+  <input type="hidden" name="latest" value="{{ latest }}">
+  <button class="btn choice" type="submit"><span class="t">{{ a.ident }}: {{ a.name }}</span>
+    <span class="d">{{ a.city }}, {{ a.state }}</span></button>
+</form>
+{% endfor %}
+{% endif %}
+{% endif %}
+
+{% if result %}
+  {% if result.error %}<p class="error" role="alert">{{ result.error }}</p>{% endif %}
+  {% for n in result.notes %}<p class="notice small">{{ n }}</p>{% endfor %}
+  {% if result.days %}
+  <h2>{{ result.dep.ident }} to {{ result.dest.ident }}</h2>
+  {% for d in result.days %}
+    {% set b = d.best %}
+    <section class="day {{ style.get(d.status, '') }}">
+      <span class="when">{{ d.day.strftime("%A %b %-d") }}</span>
+      <span class="pill">{{ d.status }}</span>
+      {% if b %}
+        <span>Leave <strong>{{ b.dep_time.astimezone(zone).strftime("%-I:%M %p") }}</strong>, land
+          <strong>{{ b.arr_time.astimezone(zone).strftime("%-I:%M %p %Z") }}</strong></span>
+        <span>{{ b.plan.route_string }}{% if b.plan.stops %} ({{ b.plan.stops|length }} fuel stop{{ "s" if b.plan.stops|length > 1 }}){% else %} (nonstop){% endif %}
+          · {{ "%.1f"|format(b.flight_hours) }} h flying · land with {{ "%.0f"|format(b.legs[-1].fuel_at_landing_gal) }} gal</span>
+        {% for r in b.top_reasons(3) %}<span class="why">{{ r }}</span>{% endfor %}
+        {% if not b.top_reasons(1) %}<span class="why">Nothing breaks your minimums.</span>{% endif %}
+        <a class="btn secondary" href="/trip/export?route={{ b.plan.airports|map(attribute='ident')|join('-') }}">Download for ForeFlight / Garmin</a>
+      {% else %}
+        <span class="why">No departure fits your time window and the daylight.</span>
+      {% endif %}
+    </section>
+  {% endfor %}
+  <p class="small muted">Times are {{ result.dep.ident }} local. NWS has no winds aloft, so time and fuel assume no
+  tailwind and at least a 10 kt headwind. The download has a .fpl file per leg for ForeFlight or Garmin Pilot and a
+  .gfp file for a GTN's SD card.</p>
+  {% endif %}
+{% endif %}
+{% endblock %}

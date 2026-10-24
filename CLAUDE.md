@@ -38,6 +38,9 @@ legal weather briefing.
 - Web app (multi-user): `web/` (FastAPI + Jinja, SQLite via `web/db.py`, signed tokens in `web/auth.py`,
   `web/pilot.py` builds Minimums/Aircraft per user: onboarding preset from `config/minimum_presets.yaml`
   + fine-tuning clamped to legal floors, crosswind capped at the airplane's demonstrated value).
+  Trip mode: `web/trips.py` (same planner, 15-min cache, Garmin zip export). Store is SQLite locally,
+  Postgres when DATABASE_URL is set (`tests/test_store.py` runs on both if TEST_DATABASE_URL is set).
+  Hosting: `render.yaml` (Render free web service + Neon Postgres). Requires SECRET_KEY on https.
   Run: `uvicorn web.app:create_app --factory`. Tests in `tests/test_web.py` (offline).
 - Daily verdicts (`outlook.check_hour`, used by Can I fly? and the email) check gust-based crosswind on the
   best runway, like the trip planner.

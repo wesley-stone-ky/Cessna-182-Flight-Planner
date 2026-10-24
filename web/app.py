@@ -14,7 +14,8 @@ from __future__ import annotations
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
@@ -33,7 +34,8 @@ from flightplanner.weekend import DISCLAIMER, GO, MARGINAL, NOGO, can_i_fly
 from . import auth
 from .auth import unsubscribe_url  # noqa: F401  (re-exported)
 from .db import Store, User
-from .pilot import TUNABLE, clamp_minimums, user_aircraft, user_minimums
+from .trips import TripPlanner, official_products, route_zip
+from .pilot import TUNABLE, clamp_minimums, tuned_profile, user_aircraft, user_minimums
 
 HERE = Path(__file__).resolve().parent
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -65,14 +67,19 @@ def _send_or_print(m) -> None:
               f"{m.get_body(('plain',)).get_content()}---\n", flush=True)
 
 
-def create_app(db_path: str | None = None, forecast=None, send_mail=None, base_url: str | None = None) -> FastAPI:
+def create_app(db_path: str | None = None, forecast=None, send_mail=None, base_url: str | None = None,
+               terrain=None, aviation=None) -> FastAPI:
     app = FastAPI(title="Weekend Flying", docs_url=None, redoc_url=None)
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
-    store = Store(db_path or os.environ.get("WEB_DB", ".cache/web.sqlite3"))
+    store = Store(db_path or os.environ.get("DATABASE_URL") or os.environ.get("WEB_DB", ".cache/web.sqlite3"))
     airports = AirportDB.load()
     get_forecast = forecast or nws_forecast
     mail = send_mail or _send_or_print
+    trips = TripPlanner(airports, get_forecast, terrain, aviation or official_products)
     secure = (base_url or os.environ.get("BASE_URL", "")).startswith("https://")
+    if secure and not os.environ.get("SECRET_KEY"):
+        raise RuntimeError("Set SECRET_KEY before running on a public https address; without it every sign-in "
+                           "link and cookie breaks when the server restarts.")
 
     # -- helpers -----------------------------------------------------------
     def url(request: Request, path: str) -> str:
@@ -114,6 +121,11 @@ def create_app(db_path: str | None = None, forecast=None, send_mail=None, base_u
     def type_choices() -> list[tuple[str, str]]:
         cat = catalog()
         return sorted(((t, cat[t].name) for t in cat), key=lambda x: x[1])
+
+    @app.get("/healthz")
+    def healthz():
+        store.get(0)            # touches the database
+        return {"ok": True}
 
     # -- landing -----------------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
@@ -323,10 +335,79 @@ def create_app(db_path: str | None = None, forecast=None, send_mail=None, base_u
             plane = {}
         elif t in catalog():
             if t != plane.get("type"):
-                plane = {"type": t, "tail_number": plane.get("tail_number", "")}
+                plane = {"type": t, "tail_number": plane.get("tail_number", "")}   # new type: its own numbers
+            else:
+                plane = tuned_profile(plane, f.get("usable_gal"), f.get("ktas_6000"), f.get("gph"))
         changes["aircraft"] = plane
         store.update(u.id, **changes)
         return RedirectResponse("/settings?saved=1", status_code=303)
+
+    # -- trip mode ---------------------------------------------------------
+    def trip_page(request: Request, u: User, status: int = 200, **ctx) -> HTMLResponse:
+        today = datetime.now(ZoneInfo(airports.get(u.home_airport).tz)).date()
+        defaults = {"dest": "", "start": today + timedelta(days=1), "end": today + timedelta(days=6),
+                    "earliest": 8, "latest": 13}
+        return page(request, "trip.html", status, user=u, ac=user_aircraft(u), today=today,
+                    last_day=today + timedelta(days=6), style=VERDICT_STYLE, **{**defaults, **ctx})
+
+    @app.get("/trip", response_class=HTMLResponse)
+    def trip_form(request: Request):
+        u = me(request)
+        if u is None:
+            return RedirectResponse("/login", status_code=303)
+        return trip_page(request, u)
+
+    @app.post("/trip", response_class=HTMLResponse)
+    def trip(request: Request, dest: str = Form(""), start: str = Form(""), end: str = Form(""),
+             earliest: int = Form(8), latest: int = Form(13)):
+        u = me(request)
+        if u is None:
+            return RedirectResponse("/login", status_code=303)
+        ac = user_aircraft(u)
+        form = {"dest": dest.strip().upper(), "earliest": earliest, "latest": latest}
+        if ac is None:
+            return trip_page(request, u, 400, error="Set your airplane in Settings first.", **form)
+        dep = airports.get(u.home_airport)
+        today = datetime.now(ZoneInfo(dep.tz)).date()
+        try:
+            d0, d1 = date.fromisoformat(start), date.fromisoformat(end)
+        except ValueError:
+            d0, d1 = today + timedelta(days=1), today + timedelta(days=6)
+        d0, d1 = max(d0, today), min(d1, today + timedelta(days=6))     # the forecast covers 7 days
+        form.update(start=d0, end=max(d0, d1))
+        earliest, latest = max(5, min(earliest, 19)), max(5, min(latest, 19))
+        if latest < earliest:
+            earliest, latest = latest, earliest
+        form.update(earliest=earliest, latest=latest)
+        try:
+            to = [airports.get(dest)] if dest.strip() else []
+        except KeyError:
+            to = []
+        if not to:
+            hits = airports.search(dest, limit=8) if dest.strip() else []
+            msg = "Where are you going? Type an airport code or town." if not dest.strip() else \
+                (f"No airport matches “{dest.strip()}”." if not hits else "")
+            return trip_page(request, u, 400 if msg else 200, error=msg, hits=hits, **form)
+        if to[0].ident == dep.ident:
+            return trip_page(request, u, 400, error="That's your home airport. Pick where you're going.", **form)
+        res = trips.plan(dep, to[0], ac, user_minimums(u), form["start"], form["end"], earliest, latest)
+        return trip_page(request, u, result=res, zone=ZoneInfo(res.tz), **{**form, "dest": to[0].ident})
+
+    @app.get("/trip/export")
+    def trip_export(request: Request, route: str = ""):
+        if me(request) is None:
+            return RedirectResponse("/login", status_code=303)
+        idents = [i for i in route.split("-") if i]
+        try:
+            name, data = route_zip(airports, idents)
+        except KeyError:
+            return page(request, "message.html", 400, title="Unknown route", body="Plan the trip again.",
+                        link=("/trip", "Plan a trip"))
+        if len(idents) < 2:
+            return page(request, "message.html", 400, title="Unknown route", body="Plan the trip again.",
+                        link=("/trip", "Plan a trip"))
+        return Response(data, media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     # -- unsubscribe, legal ------------------------------------------------
     @app.get("/unsubscribe", response_class=HTMLResponse)

@@ -22,8 +22,24 @@ def web(tmp_path, fake_registry):
     def forecast(points):
         return synthetic_forecast(points, start=datetime.now(timezone.utc) - timedelta(hours=3), days=7)
 
-    app = create_app(db_path=str(tmp_path / "web.sqlite3"), forecast=forecast, send_mail=sent.append,
-                     base_url="http://test")
+    from flightplanner.terrain import Terrain
+
+    class NoNet:
+        headers: dict = {}
+
+        def get(self, *a, **k):
+            raise ConnectionError("offline test")
+
+    import os
+    db = str(tmp_path / "web.sqlite3")
+    if os.environ.get("TEST_DATABASE_URL"):           # run the whole suite on Postgres too
+        import psycopg
+        db = os.environ["TEST_DATABASE_URL"]
+        with psycopg.connect(db) as c:
+            c.execute("DROP TABLE IF EXISTS users")
+    app = create_app(db_path=db, forecast=forecast, send_mail=sent.append,
+                     base_url="http://test", terrain=Terrain(session=NoNet()),
+                     aviation=lambda aps, db: ({}, [], []))
     client = TestClient(app, follow_redirects=True)
     client.sent = sent
     client.store = app.state.store
@@ -150,7 +166,7 @@ def test_thursday_email_from_the_web_database(web, tmp_path):
     _onboard(web, preset="cautious")
     _onboard(web, email="other@example.com")
     web.get(_link(web.sent[0]))                                  # only dad confirms
-    subs = script.subscribers_from_db(str(tmp_path / "web.sqlite3"), "http://test")
+    subs = script.subscribers_from_db(web.store.where, "http://test")
     assert [s["email"] for s in subs] == ["dad@example.com"]
     assert subs[0]["mins"].max_crosswind_kt == 10                 # his Cautious preset, not the file defaults
     ap = AirportDB.load().get("KLEX")
@@ -159,3 +175,57 @@ def test_thursday_email_from_the_web_database(web, tmp_path):
     html = msg.get_body(("html",)).get_content()
     assert "Stop these emails" in html and "/unsubscribe?token=" in html
     assert msg["Subject"].startswith("Weekend flying at KLEX") and "crosswind 10 kt" in html
+
+
+
+def test_trip_needs_an_airplane(web):
+    web.post("/start/plane", data={"skip": "1"})
+    web.post("/start/airport", data={"confirm": "KLEX"})
+    web.post("/start/caution", data={"preset": "standard"})
+    web.post("/start/email", data={"email": "p@example.com", "agree": "1"})
+    assert "Set your airplane" in web.get("/trip").text
+
+
+def test_trip_plans_days_and_exports_garmin_files(web):
+    import io
+    import zipfile
+    _onboard(web)
+    r = web.post("/trip", data={"dest": "georgetown", "start": "2000-01-01", "end": "2999-01-01",
+                                "earliest": "8", "latest": "13"})
+    assert "Which airport?" in r.text and "KGGE: Georgetown County" in r.text
+    r = web.post("/trip", data={"dest": "KGGE", "start": "2000-01-01", "end": "2999-01-01",
+                                "earliest": "13", "latest": "8"})     # swapped hours and silly dates get fixed
+    assert r.status_code == 200 and "KLEX to KGGE" in r.text
+    pills = re.findall(r'<span class="pill">(GO|MARGINAL|NO-GO)</span>', r.text)
+    assert 1 <= len(pills) <= 7                                     # never past the 7-day forecast
+    assert "Leave <strong>" in r.text and ("fuel stop" in r.text or "nonstop" in r.text)
+    link = re.search(r'href="(/trip/export\?route=[A-Z0-9-]+)"', r.text).group(1)
+    z = web.get(link)
+    assert z.headers["content-type"] == "application/zip"
+    names = zipfile.ZipFile(io.BytesIO(z.content)).namelist()
+    assert names[0].startswith("KLEX-") and any(n.endswith(".fpl") for n in names)
+    assert web.post("/trip", data={"dest": "KLEX"}).status_code == 400   # home airport
+    assert web.get("/trip/export?route=KLEX").status_code == 400
+
+
+def test_settings_tune_the_airplane(web):
+    from web.pilot import user_aircraft
+    _onboard(web)
+    web.post("/settings", data={"preset": "standard", "home_airport": "KLEX", "type_id": "cessna-182/182R",
+                                "usable_gal": "70", "ktas_6000": "138", "gph": "12.5",
+                                "airport_min_ceiling_ft_agl": "2500", "airport_min_vis_sm": "5",
+                                "max_crosswind_kt": "12", "max_surface_wind_kt": "25", "max_gust_kt": "25"})
+    a = user_aircraft(web.store.by_email("dad@example.com"))
+    assert a.usable_gal == 70 and a.cruise_gph == 12.5 and a.ktas(6000) == 138
+    assert "138" in web.get("/settings").text
+
+
+def test_healthz(web):
+    assert web.get("/healthz").json() == {"ok": True}
+
+
+def test_public_https_needs_a_secret_key(tmp_path, monkeypatch):
+    from web.app import create_app
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        create_app(db_path=str(tmp_path / "x.sqlite3"), base_url="https://example.com")

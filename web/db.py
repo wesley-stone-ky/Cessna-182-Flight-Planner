@@ -1,4 +1,4 @@
-"""User store. SQLite for now (one file, no server); the SQL is plain enough to move to Postgres.
+"""User store: Postgres when DATABASE_URL is set (hosting), otherwise one SQLite file (local use).
 
 One row per pilot: email, home airport, minimums (an onboarding preset plus any
 fine-tuned numbers) and their airplane (a "my airplane" profile dict, see
@@ -14,7 +14,7 @@ from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY,
+    id            {id_col},
     email         TEXT NOT NULL UNIQUE,
     verified      INTEGER NOT NULL DEFAULT 0,   -- clicked a sign-in link at least once
     created_at    TEXT NOT NULL,
@@ -47,16 +47,31 @@ def _now() -> str:
 
 
 class Store:
-    def __init__(self, path: str | Path):
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.path = str(path)
-        with self._conn() as c:
-            c.executescript(SCHEMA)
+    """`where` is a SQLite file path or a postgres:// / postgresql:// URL."""
 
-    def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.path)
+    def __init__(self, where: str | Path):
+        self.where = str(where)
+        self.pg = self.where.startswith(("postgres://", "postgresql://"))
+        if not self.pg:
+            Path(self.where).parent.mkdir(parents=True, exist_ok=True)
+        schema = SCHEMA.replace("{id_col}", "BIGSERIAL PRIMARY KEY" if self.pg else "INTEGER PRIMARY KEY")
+        with self._conn() as c:
+            if self.pg:
+                c.execute(schema)
+            else:
+                c.executescript(schema)
+
+    def _conn(self):
+        if self.pg:
+            import psycopg
+            from psycopg.rows import dict_row
+            return psycopg.connect(self.where, row_factory=dict_row)
+        c = sqlite3.connect(self.where)
         c.row_factory = sqlite3.Row
         return c
+
+    def _q(self, sql: str) -> str:
+        return sql.replace("?", "%s") if self.pg else sql
 
     @staticmethod
     def _user(r: sqlite3.Row | None) -> User | None:
@@ -68,19 +83,19 @@ class Store:
 
     def get(self, user_id: int) -> User | None:
         with self._conn() as c:
-            return self._user(c.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+            return self._user(c.execute(self._q("SELECT * FROM users WHERE id = ?"), (user_id,)).fetchone())
 
     def by_email(self, email: str) -> User | None:
         with self._conn() as c:
-            return self._user(c.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone())
+            return self._user(c.execute(self._q("SELECT * FROM users WHERE email = ?"), (email.lower(),)).fetchone())
 
     def create(self, email: str, home_airport: str, preset: str, aircraft: dict, set_up_by: str = "") -> User:
         with self._conn() as c:
-            cur = c.execute(
+            cur = c.execute(self._q(
                 "INSERT INTO users (email, created_at, agreed_at, home_airport, preset, aircraft_json, set_up_by) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"),
                 (email.lower(), _now(), _now(), home_airport, preset, json.dumps(aircraft), set_up_by.lower()))
-            new_id = cur.lastrowid
+            new_id = cur.fetchone()["id"]
         return self.get(new_id)     # after the commit, so the new connection can see the row
 
     def update(self, user_id: int, **fields) -> User:
@@ -91,7 +106,7 @@ class Store:
             sets.append(f"{cols[k]} = ?")
             vals.append(json.dumps(v) if k in ("minimums", "aircraft") else (int(v) if isinstance(v, bool) else v))
         with self._conn() as c:
-            c.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", (*vals, user_id))
+            c.execute(self._q(f"UPDATE users SET {', '.join(sets)} WHERE id = ?"), (*vals, user_id))
         return self.get(user_id)
 
     def weekly_recipients(self) -> list[User]:

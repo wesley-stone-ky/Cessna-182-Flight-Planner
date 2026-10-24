@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import math
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -88,14 +89,31 @@ class Terrain:
                     self._offline = True   # don't wait on every tile once the service has failed
         return self._tiles[k]
 
-    def _sample(self, lat: float, lon: float) -> float | None:
-        """Highest elevation (ft) in the 3x3 pixels around a point."""
+    @staticmethod
+    def _pixel(lat: float, lon: float) -> tuple[int, int]:
+        """Global pixel coordinates of a point at ZOOM (Web Mercator)."""
         n = 2 ** ZOOM
         fx = (lon + 180) / 360 * n
-        lat_r = math.radians(lat)
-        fy = (1 - math.asinh(math.tan(lat_r)) / math.pi) / 2 * n
-        tx, ty = int(fx), int(fy)
-        px, py = int((fx - tx) * 256), int((fy - ty) * 256)
+        fy = (1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * n
+        return int(fx * 256), int(fy * 256)
+
+    def _prefetch(self, pts: list[tuple[float, float]]) -> None:
+        """Download every tile these points need, several at a time (a long route touches 100+ tiles)."""
+        need = set()
+        for la, lo in pts:
+            gx, gy = self._pixel(la, lo)
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    need.add(((gx + dx) // 256, (gy + dy) // 256))
+        need -= set(self._tiles)
+        if need and not self._offline:
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                list(ex.map(lambda k: self._tile(*k), sorted(need)))
+
+    def _sample(self, lat: float, lon: float) -> float | None:
+        """Highest elevation (ft) in the 3x3 pixels around a point."""
+        gx0, gy0 = self._pixel(lat, lon)
+        tx, ty, px, py = gx0 // 256, gy0 // 256, gx0 % 256, gy0 % 256
         best = None
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
@@ -110,6 +128,7 @@ class Terrain:
     def elevations(self, pts: list[tuple[float, float]]) -> list[float]:
         pts = [(round(a, 3), round(b, 3)) for a, b in pts]
         missing = sorted({p for p in pts if _key(*p) not in self.cache})
+        self._prefetch(missing)
         for p in missing:
             v = self._sample(*p)
             if v is not None:
