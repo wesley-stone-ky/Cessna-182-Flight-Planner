@@ -35,6 +35,8 @@ Thursday email.</p>{% endif %}
   <p>Find the best day, time and route to another airport this week.</p>
   <a class="btn" href="/trip">Plan a trip</a>
 </div>
-<p class="small muted">Forecast: National Weather Service 7-day grid, checked hour by hour in daylight. For today, also
-check the latest METAR and TAF.</p>
+<p class="small muted">Forecast: National Weather Service 7-day grid, checked hour by hour in daylight.
+{% if taf %}For the hours the {{ taf.station }} TAF covers{% if taf.station != ap.ident %} ({{ "%.0f"|format(taf.dist_nm) }} nm
+away; {{ ap.ident }} has none){% endif %}, the worse of the TAF and the grid is used.{% else %}No TAF is in
+the answer right now.{% endif %} For today, also check the latest METAR.</p>
 {% endblock %}

@@ -50,18 +50,26 @@ def weekend_days(today: date) -> list[date]:
     return out
 
 
+def _short(line: str) -> str:
+    """One explain_hours line without its source tag, except to say when the official TAF drove it."""
+    head, _, src = line.partition(" — ")
+    return head + (" (TAF)" if "TAF" in src else "")
+
+
 def _reason(o: DayOutlook) -> str:
     if o.verdict == "No data":
         return "Past the end of the 7-day forecast."
-    r = (o.reasons or [""])[0].split(" — ")[0]
+    r = _short((o.reasons or [""])[0])
     if o.verdict == "Good" and o.summary != "no significant weather":
         r += f" Watch for: {o.summary}."
     return r
 
 
-def weekend_for(fc: GridForecast, ap: Airport, mins: Minimums, tz: str, today: date) -> AirportWeekend:
+def weekend_for(fc: GridForecast, ap: Airport, mins: Minimums, tz: str, today: date,
+                taf: dict | None = None) -> AirportWeekend:
     want = weekend_days(today)
-    outs = {o.day: o for o in airport_outlook(fc, ap, mins, tz, days=(want[-1] - today).days + 1, start=today)}
+    outs = {o.day: o for o in airport_outlook(fc, ap, mins, tz, days=(want[-1] - today).days + 1, start=today,
+                                              taf=taf)}
     days = []
     for d in want:
         o = outs.get(d)
@@ -88,15 +96,18 @@ def _rest_of_today(o: DayOutlook, now: datetime, mins: Minimums) -> WeekendDay:
     frac = ok / len(hrs)
     verdict = GO if frac >= 0.6 and ok >= min(3, len(hrs)) else MARGINAL if frac >= 0.3 else NOGO
     problems = explain_hours(hrs, len(hrs), mins)
-    reason = problems[0].split(" — ")[0] if problems else "Every daylight hour left today meets your airport minimums."
+    reason = _short(problems[0]) if problems else "Every daylight hour left today meets your airport minimums."
     return WeekendDay(o.day, verdict, _windows([(h.time, h.ok) for h in hrs]), reason)
 
 
-def can_i_fly(fc: GridForecast, ap: Airport, mins: Minimums, tz: str, now: datetime) -> list[tuple[str, WeekendDay]]:
-    """[(label, answer)] for today, tomorrow and the weekend at one airport."""
+def can_i_fly(fc: GridForecast, ap: Airport, mins: Minimums, tz: str, now: datetime,
+              taf: dict | None = None) -> list[tuple[str, WeekendDay]]:
+    """[(label, answer)] for today, tomorrow and the weekend at one airport (TAF, when given, for the hours
+    it covers)."""
     today = now.astimezone(ZoneInfo(tz)).date()
     want = ask_days(today)
-    outs = {o.day: o for o in airport_outlook(fc, ap, mins, tz, days=(want[-1] - today).days + 1, start=today)}
+    outs = {o.day: o for o in airport_outlook(fc, ap, mins, tz, days=(want[-1] - today).days + 1, start=today,
+                                              taf=taf)}
     res = []
     for d in want:
         label = "Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else f"{d:%A}"

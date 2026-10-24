@@ -43,7 +43,8 @@ legal weather briefing.
   Hosting: `render.yaml` (Render free web service + Neon Postgres). Requires SECRET_KEY on https.
   Run: `uvicorn web.app:create_app --factory`. Tests in `tests/test_web.py` (offline).
 - Daily verdicts (`outlook.check_hour`, used by Can I fly? and the email) check gust-based crosswind on the
-  best runway, like the trip planner.
+  best runway, like the trip planner, and use the WORSE of TAF (incl. TEMPO/PROB) and NWS grid for the
+  hours a TAF covers. A TAF must never make an answer less cautious.
 - UI: `app.py` has 3 tabs (Trip planner, 7-day outlook, Before you go/live). Outlook logic is in
   `flightplanner/outlook.py`; the Leaflet live map (NEXRAD radar tiles from IEM, advisories, PIREPs) is in
   `flightplanner/livemap.py`.

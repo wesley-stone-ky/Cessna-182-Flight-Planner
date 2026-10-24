@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from .airports import Airport, AirportDB, best_runway
 from .config import Minimums
 from .sun import sun_times
-from .weather import GridForecast, WxPoint, flight_category
+from .weather import GridForecast, TafPeriod, WxPoint, flight_category, taf_at
 
 
 @dataclass
@@ -53,35 +53,68 @@ def source_of(wx: WxPoint) -> str:
     return "NWS" if wx.nws else "model"
 
 
-def check_hour(wx: WxPoint, mins: Minimums, ap: Airport | None = None) -> list[tuple[str, str]]:
+def source_label(srcs: set[str]) -> str:
+    if "TAF" in srcs:
+        return "TAF + NWS forecast" if srcs - {"TAF"} else "TAF (worse of TAF and NWS grid)"
+    return "NWS forecast" if srcs == {"NWS"} else "model estimate" if srcs == {"model"} else "NWS + model"
+
+
+def taf_hour(taf: dict | None, when: datetime) -> list[TafPeriod]:
+    """The TAF groups in force at `when`: prevailing first, then any TEMPO/PROB. Empty if no TAF covers it."""
+    if not taf:
+        return []
+    prevailing, temps = taf_at(taf, when)
+    return [prevailing] + temps if prevailing is not None else []
+
+
+def _lowest(*vals):
+    vals = [v for v in vals if v is not None]
+    return min(vals) if vals else None
+
+
+def check_hour(wx: WxPoint, mins: Minimums, ap: Airport | None = None,
+               taf_groups: list[TafPeriod] | None = None) -> list[tuple[str, str]]:
     """Which of your airport minimums this hour breaks, with the numbers.
 
-    With `ap`, also the crosswind on its best runway, using the gust value (same rule as the trip planner)."""
+    With `ap`, also the crosswind on its best runway, using the gust value (same rule as the trip planner).
+    With `taf_groups` (the TAF in force this hour, incl. TEMPO/PROB), every check uses the WORSE of the TAF
+    and the NWS grid, so an official forecast can only make the answer more cautious.
+    """
     out = []
-    cig = wx.ceiling_agl_ft()
+    g = taf_groups or []
+    cig = _lowest(wx.ceiling_agl_ft(), *[p.ceiling_ft for p in g])
+    vis = _lowest(wx.vis_sm, *[p.vis_sm for p in g])
+    winds = [(wx.wind_dir, wx.wind_kt, wx.gust_kt)] + [(p.wind_dir, p.wind_kt or 0.0, p.gust_kt or 0.0) for p in g
+                                                       if p.wind_kt is not None]
+    wind, gust = max(w for _, w, _ in winds), max(gu for _, _, gu in winds)
+    src = " (TAF)" if g and (cig != wx.ceiling_agl_ft() or vis != wx.vis_sm) else ""
     if cig is not None and cig < mins.airport_min_ceiling_ft_agl:
-        out.append(("ceiling", f"ceiling ~{round(cig, -2):,.0f} ft (min {mins.airport_min_ceiling_ft_agl:,.0f})"))
-    if wx.vis_sm is not None and wx.vis_sm < mins.airport_min_vis_sm:
-        out.append(("visibility", f"visibility {wx.vis_sm:.1f} sm (min {mins.airport_min_vis_sm:.0f})"))
-    if wx.gust_kt >= mins.max_gust_kt:
-        out.append(("gusts", f"gusts {wx.gust_kt:.0f} kt (limit {mins.max_gust_kt:.0f})"))
-    elif wx.wind_kt >= mins.max_surface_wind_kt:
-        out.append(("wind", f"wind {wx.wind_kt:.0f} kt (limit {mins.max_surface_wind_kt:.0f})"))
+        out.append(("ceiling", f"ceiling ~{round(cig, -2):,.0f} ft (min {mins.airport_min_ceiling_ft_agl:,.0f}){src}"))
+    if vis is not None and vis < mins.airport_min_vis_sm:
+        out.append(("visibility", f"visibility {vis:.1f} sm (min {mins.airport_min_vis_sm:.0f}){src}"))
+    if gust >= mins.max_gust_kt:
+        out.append(("gusts", f"gusts {gust:.0f} kt (limit {mins.max_gust_kt:.0f})"))
+    elif wind >= mins.max_surface_wind_kt:
+        out.append(("wind", f"wind {wind:.0f} kt (limit {mins.max_surface_wind_kt:.0f})"))
     if ap is not None:
-        kt = max(wx.wind_kt, wx.gust_kt)
-        if not ap.runways:
-            if kt > mins.max_crosswind_kt:
-                out.append(("crosswind", f"wind {kt:.0f} kt and no runway data to check the crosswind"))
-        else:
-            rw = best_runway(ap, wx.wind_dir, kt)
+        worst = None
+        for d, k, gu in winds:
+            kt = max(k, gu)
+            if not ap.runways:
+                if kt > mins.max_crosswind_kt:
+                    worst = (kt, f"wind {kt:.0f} kt and no runway data to check the crosswind")
+                continue
+            rw = best_runway(ap, d, kt)
             if rw is None:
-                out.append(("crosswind", f"no runway of 2,500 ft or more without a tailwind (wind "
-                                         f"{wx.wind_dir:03.0f}@{kt:.0f})"))
-            elif rw[1] > mins.max_crosswind_kt:
-                out.append(("crosswind", f"crosswind {rw[1]:.0f} kt incl. gusts on rwy {rw[0]} "
-                                         f"(limit {mins.max_crosswind_kt:.0f})"))
-    if wx.storm_level(mins.cape_caution_jkg, mins.cape_nogo_jkg) == "likely":
-        out.append(("storms", f"thunderstorms likely ({wx.storm_detail()})"))
+                worst = (99, f"no runway of 2,500 ft or more without a tailwind (wind {d or 0:03.0f}@{kt:.0f})")
+            elif rw[1] > mins.max_crosswind_kt and (worst is None or rw[1] > worst[0]):
+                worst = (rw[1], f"crosswind {rw[1]:.0f} kt incl. gusts on rwy {rw[0]} "
+                                f"(limit {mins.max_crosswind_kt:.0f})")
+        if worst:
+            out.append(("crosswind", worst[1]))
+    taf_ts = any("TS" in (p.wx or "").upper() for p in g)
+    if wx.storm_level(mins.cape_caution_jkg, mins.cape_nogo_jkg) == "likely" or taf_ts:
+        out.append(("storms", "thunderstorms in the TAF" if taf_ts else f"thunderstorms likely ({wx.storm_detail()})"))
     return out
 
 
@@ -113,16 +146,15 @@ def explain_hours(hours: list[HourCheck], daylight: int, mins: Minimums) -> list
             by_kind.setdefault(kind, []).append(h)
     for kind, hs in sorted(by_kind.items(), key=lambda kv: -len(kv[1])):
         texts = [t for h in hs for k, t in h.problems if k == kind]
-        if kind == "ceiling":
-            worst = min(h.ceiling_ft for h in hs if h.ceiling_ft is not None)
-            detail = f"lowest ~{round(worst, -2):,.0f} ft vs your {mins.airport_min_ceiling_ft_agl:,.0f} ft"
-        elif kind == "visibility":
-            worst = min(h.vis_sm for h in hs if h.vis_sm is not None)
-            detail = f"down to {worst:.1f} sm vs your {mins.airport_min_vis_sm:.0f} sm"
+        cigs = [h.ceiling_ft for h in hs if h.ceiling_ft is not None]
+        viss = [h.vis_sm for h in hs if h.vis_sm is not None]
+        if kind == "ceiling" and cigs:
+            detail = f"lowest ~{round(min(cigs), -2):,.0f} ft vs your {mins.airport_min_ceiling_ft_agl:,.0f} ft"
+        elif kind == "visibility" and viss:
+            detail = f"down to {min(viss):.1f} sm vs your {mins.airport_min_vis_sm:.0f} sm"
         else:
             detail = texts[0]
-        srcs = {h.source for h in hs}
-        src = "NWS forecast" if srcs == {"NWS"} else "model estimate" if srcs == {"model"} else "NWS + model"
+        src = source_label({h.source for h in hs})
         lines.append(f"{KIND_LABEL.get(kind, kind)}: {len(hs)} of {covered} hours ({_span([h.time for h in hs])}), "
                      f"{detail} — {src}")
     return lines
@@ -147,7 +179,9 @@ def _windows(flags: list[tuple[datetime, bool]]) -> str:
 
 
 def airport_outlook(fc: GridForecast, ap: Airport, mins: Minimums, tz: str = "America/New_York",
-                    days: int = 7, start: date | None = None) -> list[DayOutlook]:
+                    days: int = 7, start: date | None = None, taf: dict | None = None) -> list[DayOutlook]:
+    """Day-by-day flyability at one airport. `taf` (as from AviationWeather.for_airports) adds the official
+    forecast for the hours it covers; the worse of TAF and NWS grid is used."""
     zone = ZoneInfo(tz)
     start = start or datetime.now(zone).date()
     out = []
@@ -161,11 +195,14 @@ def airport_outlook(fc: GridForecast, ap: Airport, mins: Minimums, tz: str = "Am
             daylight += 1
             wx = fc.at(ap.lat, ap.lon, t.astimezone(timezone.utc))
             if wx is not None:
-                probs = check_hour(wx, mins, ap)
+                groups = taf_hour(taf, t.astimezone(timezone.utc))
+                probs = check_hour(wx, mins, ap, groups)
                 wxs.append(wx)
                 flags.append((t, not probs))
-                checks.append(HourCheck(
-                    t, not probs, probs, source_of(wx), wx.ceiling_agl_ft(), wx.vis_sm,
+                checks.append(HourCheck(   # effective (worse of TAF and grid) ceiling and visibility
+                    t, not probs, probs, "TAF" if groups else source_of(wx),
+                    _lowest(wx.ceiling_agl_ft(), *[p.ceiling_ft for p in groups]),
+                    _lowest(wx.vis_sm, *[p.vis_sm for p in groups]),
                     f"{wx.wind_dir:03.0f}@{wx.wind_kt:.0f}" + (f"G{wx.gust_kt:.0f}" if wx.gust_kt >= wx.wind_kt + 5 else ""),
                     wx.precip_prob, wx.storm_level(mins.cape_caution_jkg, mins.cape_nogo_jkg)))
             t += timedelta(hours=1)
@@ -177,8 +214,8 @@ def airport_outlook(fc: GridForecast, ap: Airport, mins: Minimums, tz: str = "Am
                                   "Beyond the forecast range",
                                   ["No forecast reaches this day yet (the NWS forecast covers 7 days)."]))
             continue
-        cigs = [w.ceiling_agl_ft() for w in wxs if w.ceiling_agl_ft() is not None]
-        viss = [w.vis_sm for w in wxs if w.vis_sm is not None]
+        cigs = [c.ceiling_ft for c in checks if c.ceiling_ft is not None]
+        viss = [c.vis_sm for c in checks if c.vis_sm is not None]
         flyable = sum(ok for _, ok in flags)
         lv = {w.storm_level(mins.cape_caution_jkg, mins.cape_nogo_jkg) for w in wxs}
         storm_lvl = "likely" if "likely" in lv else "some" if "some" in lv else "low"
@@ -210,8 +247,7 @@ def airport_outlook(fc: GridForecast, ap: Airport, mins: Minimums, tz: str = "Am
             f"{wd:03.0f}@{ws:.0f}" + (" (est.)" if mid.aloft_estimated else ""),
             min(fz) if fz else None, ", ".join(bits) or "no significant weather",
             explain_hours(checks, daylight, mins) or ["Every forecast daylight hour meets your airport minimums."],
-            {"NWS"} == {c.source for c in checks} and "NWS forecast" or
-            ({"model"} == {c.source for c in checks} and "model estimate" or "NWS + model"),
+            source_label({c.source for c in checks}),
             covered, checks))
     return out
 
