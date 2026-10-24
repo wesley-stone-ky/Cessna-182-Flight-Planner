@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block main %}
+{% include "_steps.html" %}
+<h1>Where should we send the Thursday email?</h1>
+<p class="muted">No password. We email you a link whenever you want to sign in.</p>
+<form method="post" action="/start/email" class="card">
+  <label>Email <input type="email" name="email" value="{{ email or '' }}" autocomplete="email" autofocus></label>
+  <label class="check"><input type="checkbox" name="agree" value="1">
+    <span>I understand this is a <strong>screening tool, not a weather briefing</strong>. I'll get an official briefing
+    and use my airplane's handbook before every flight.</span></label>
+  <label class="check"><input type="checkbox" name="for_someone" value="1" {% if for_someone %}checked{% endif %}>
+    <span>I'm setting this up for someone else. We'll email them a link.</span></label>
+  <label class="small">Your own email (optional, if setting it up for someone else)
+    <input type="email" name="my_email" value="{{ my_email or '' }}" autocomplete="email"></label>
+  <button class="btn wide" type="submit">Show me this weekend</button>
+</form>
+<p class="small muted">By continuing you agree to the <a href="/terms">terms</a>.</p>
+{% endblock %}

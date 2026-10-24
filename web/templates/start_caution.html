@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block main %}
+{% include "_steps.html" %}
+<h1>How cautious do you like to be?</h1>
+<p class="muted">This sets your personal minimums. You can change any number later.</p>
+{% for key, p in presets.items() %}
+<form method="post" action="/start/caution"><input type="hidden" name="preset" value="{{ key }}">
+  <button class="btn choice" type="submit"><span class="t">{{ p.label }}</span>
+    <span class="d">{{ p.blurb }}</span>
+    <span class="d">Ceiling {{ "{:,}".format(p.airport_min_ceiling_ft_agl) }} ft · visibility {{ p.airport_min_vis_sm }} miles ·
+      crosswind {{ p.max_crosswind_kt }} kt · gusts {{ p.max_gust_kt }} kt</span></button>
+</form>
+{% endfor %}
+<form method="post" action="/start/caution"><input type="hidden" name="preset" value="cautious">
+  <button class="btn secondary wide" type="submit">I'm not sure (use Cautious)</button></form>
+{% endblock %}

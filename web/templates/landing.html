@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Can you fly this weekend?</h1>
+<p class="lede">A straight answer for today, tomorrow and the weekend at your airport, checked hour by hour against
+<em>your</em> personal minimums. Every Thursday evening we email you the weekend's answer.</p>
+<div class="card">
+  <p><strong>Three questions and you're done:</strong> your airplane, your home airport, and how cautious you like
+  to be. No password. Change anything later.</p>
+  <a class="btn wide" href="/start">Get started</a>
+  <p class="small muted">Already set up? <a href="/login">Sign in with your email</a>.</p>
+</div>
+<p class="small muted">Weather comes from the National Weather Service 7-day forecast. Crosswind is checked on your
+airport's best runway, including gusts.</p>
+{% endblock %}

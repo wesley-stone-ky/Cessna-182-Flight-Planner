@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Check your email</h1>
+<div class="card">
+  {% if for_someone %}
+  <p>We emailed a link to <strong>{{ email }}</strong>. When they open it, they'll see this weekend's answer and start
+  getting the Thursday email.</p>
+  {% else %}
+  <p>If <strong>{{ email }}</strong> has an account, we've emailed it a sign-in link. It works for 24 hours.</p>
+  <p class="muted small">Don't see it? Check the spam folder.</p>
+  {% endif %}
+</div>
+{% endblock %}

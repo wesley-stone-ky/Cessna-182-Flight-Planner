@@ -119,11 +119,11 @@ def subject(weekends: list[AirportWeekend]) -> str:
 
 def _mins_line(mins: Minimums) -> str:
     return (f"Your minimums: ceiling {mins.airport_min_ceiling_ft_agl:,.0f} ft, visibility "
-            f"{mins.airport_min_vis_sm:.0f} sm, wind {mins.max_surface_wind_kt:.0f} kt, gusts "
-            f"{mins.max_gust_kt:.0f} kt, daylight only.")
+            f"{mins.airport_min_vis_sm:.0f} sm, crosswind {mins.max_crosswind_kt:.0f} kt incl. gusts, wind "
+            f"{mins.max_surface_wind_kt:.0f} kt, gusts {mins.max_gust_kt:.0f} kt, daylight only.")
 
 
-def render_text(weekends: list[AirportWeekend], mins: Minimums) -> str:
+def render_text(weekends: list[AirportWeekend], mins: Minimums, unsubscribe_url: str | None = None) -> str:
     lines = ["Can you fly this weekend?", ""]
     for w in weekends:
         lines.append(f"{w.airport.ident} ({w.airport.name})")
@@ -133,11 +133,12 @@ def render_text(weekends: list[AirportWeekend], mins: Minimums) -> str:
             lines.append(f"    {d.reason}")
         lines.append("")
     lines += [_mins_line(mins), "Forecast: National Weather Service 7-day grid, checked hour by hour.", "",
-              DISCLAIMER, "", "To stop these emails, reply STOP."]
+              DISCLAIMER, "",
+              f"To stop these emails: {unsubscribe_url}" if unsubscribe_url else "To stop these emails, reply STOP."]
     return "\n".join(lines)
 
 
-def render_html(weekends: list[AirportWeekend], mins: Minimums) -> str:
+def render_html(weekends: list[AirportWeekend], mins: Minimums, unsubscribe_url: str | None = None) -> str:
     """Email-safe HTML: tables and inline styles only."""
     font = "font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;"
     rows = []
@@ -171,5 +172,7 @@ def render_html(weekends: list[AirportWeekend], mins: Minimums) -> str:
         f'Forecast: National Weather Service 7-day grid, checked hour by hour.</p>'
         f'<p style="{font}font-size:13px;color:#13233a;margin:12px 0 0;padding:10px 12px;background:#f6e4ee;'
         f'border-radius:4px">{escape(DISCLAIMER)}</p>'
-        f'<p style="{font}font-size:12px;color:#8794a6;margin:16px 0 0">To stop these emails, reply STOP.</p>'
+        f'<p style="{font}font-size:12px;color:#8794a6;margin:16px 0 0">' + (
+            f'<a href="{escape(unsubscribe_url)}" style="color:#8794a6">Stop these emails</a>' if unsubscribe_url
+            else "To stop these emails, reply STOP.") + '</p>'
         f'</td></tr></table></div>')

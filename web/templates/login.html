@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Sign in</h1>
+<p class="muted">We'll email you a link. No password needed.</p>
+<form method="post" action="/login" class="card">
+  <label>Email <input type="email" name="email" autocomplete="email" autofocus></label>
+  <button class="btn wide" type="submit">Email me a link</button>
+</form>
+<p class="small muted">New here? <a href="/start">Get started</a>.</p>
+{% endblock %}

@@ -56,3 +56,15 @@ def load_minimums(overrides: dict | None = None) -> Minimums:
     raw.update(overrides or {})
     known = {f.name for f in fields(Minimums)}
     return Minimums(**{k: v for k, v in raw.items() if k in known})
+
+
+def minimum_presets() -> dict[str, dict]:
+    """{"cautious": {"label", "blurb", <Minimums fields>...}, ...} from config/minimum_presets.yaml."""
+    return load_yaml("minimum_presets.yaml")
+
+
+def preset_minimums(name: str, overrides: dict | None = None) -> Minimums:
+    """Minimums for an onboarding preset, with any fine-tuned numbers on top."""
+    p = {k: v for k, v in minimum_presets()[name].items() if k not in ("label", "blurb")}
+    p.update(overrides or {})
+    return load_minimums(p)
