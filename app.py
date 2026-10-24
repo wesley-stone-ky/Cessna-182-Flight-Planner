@@ -65,6 +65,8 @@ from flightplanner.planner import (NOGO, CAUTION, Context, attach_terrain, candi
                                    forecast_points, route_weather_rows, search_days)
 from flightplanner.terrain import Terrain
 from flightplanner.weather import AviationWeather, decode_metar, fetch_forecast
+import urllib.parse
+from flightplanner.export import share_text
 from flightplanner.fuel import fuel_info
 from flightplanner.fuel import price_url as fuel_price_url
 from flightplanner.wb import Loading, WeightBalance
@@ -611,6 +613,12 @@ def plan_detail(ctx, r, key: str):
 
 
     fuel_block(r)
+
+    st.markdown("**📲 Send to your copilot**")
+    msg = share_text(r, TZ, str(ac.raw.get("tail_number", "")).replace("N____", ""))
+    st.code(msg, language=None, wrap_lines=True)
+    st.link_button("Open in Messages", "sms:&body=" + urllib.parse.quote(msg), width="stretch" if PHONE else "content")
+    st.caption("The copy button is at the top right of the box. 'Open in Messages' works on a phone.")
 
     ids = [a.ident for a in r.plan.airports]
     zbuf = io.BytesIO()

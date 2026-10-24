@@ -57,6 +57,7 @@ power, {{ '%g' % ac.usable_gal }} gal usable.{% endif %}</p>
         {% for r in b.top_reasons(3) %}<span class="why">{{ r }}</span>{% endfor %}
         {% if not b.top_reasons(1) %}<span class="why">Nothing breaks your minimums.</span>{% endif %}
         <a class="btn secondary" href="/trip/export?route={{ b.plan.airports|map(attribute='ident')|join('-') }}">Download for ForeFlight / Garmin</a>
+        {% if share %}<a class="btn secondary" href="sms:&amp;body={{ share(b)|urlencode }}">Text this to my copilot</a>{% endif %}
       {% else %}
         <span class="why">No departure fits your time window and the daylight.</span>
       {% endif %}

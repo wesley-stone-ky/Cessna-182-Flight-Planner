@@ -975,3 +975,60 @@ def test_taf_can_only_make_the_daily_answer_more_cautious(db, ac, mins):
     _clear_skies(ctx, cloud_cover_low=95, visibility=1500)
     clear = {"station": "KLEX", "periods": [TafPeriod(t0, t0 + timedelta(hours=30), "", 40, 5, None, 10.0, None, "")]}
     assert can_i_fly(ctx.forecast, ap, mins, ctx.tz, now, taf=clear)[0][1].verdict == NOGO
+
+
+# --- fuel-stop hours and the copilot text ---------------------------------------
+def test_attendance_parsing():
+    from flightplanner.fuel import attended_at
+    sat10, fri1940 = datetime(2026, 10, 24, 10, 0), datetime(2026, 10, 23, 19, 40)
+    assert attended_at("ALL ALL 0700-1900", sat10) is True
+    assert attended_at("ALL ALL 0700-1900", fri1940) is False
+    split = "ALL MON-FRI 0800-1700; ALL SAT-SUN 0900-1600"
+    assert attended_at(split, sat10) is True and attended_at(split, fri1940) is False
+    assert attended_at("UNATNDD", sat10) is False
+    assert attended_at("IREG", sat10) is None and attended_at("ON CALL", sat10) is None
+    assert attended_at("ALL ALL ALL", fri1940) is True
+
+
+def _fuel_csv(tmp_path, db, special: dict):
+    f = tmp_path / "fuel.csv"
+    lines = ["ident,faa_id,fuel_types,attendance,self_serve,eff_date"]
+    for ap in db.airports.values():
+        att, ss = special.get(ap.ident, ("ALL ALL ALL", ""))
+        lines.append(f'{ap.ident},{ap.ident[1:] if ap.ident.startswith("K") else ap.ident},100LL,"{att}",{ss},2026/10/01')
+    f.write_text("\n".join(lines) + "\n")
+    return f
+
+
+def test_fuel_stop_after_hours_is_cautioned(db, ac, mins, monkeypatch, tmp_path):
+    import flightplanner.fuel as fuel
+    plans = [p for p in candidate_plans(db, db.get("KLEX"), db.get("KSPG"), ac, mins) if p.stops]
+    stop = plans[0].stops[0].ident
+    for ss, expect in (("", True), ("1", False)):
+        monkeypatch.setattr(fuel, "FUEL_FILE", _fuel_csv(tmp_path, db, {stop: ("ALL ALL 0000-0100", ss)}))
+        fuel.load_fuel.cache_clear()
+        try:
+            ctx = _ctx(db, ac, mins, plans)
+            day = ctx.local(ctx.now).date() + timedelta(days=1)
+            from zoneinfo import ZoneInfo
+            dep = datetime(day.year, day.month, day.day, 9, tzinfo=ZoneInfo(ctx.tz)).astimezone(timezone.utc)
+            r = evaluate_plan(ctx, plans[0], dep)
+            hit = [f for f in r.findings if f.kind == "fuel-hours"]
+            assert bool(hit) is expect, (ss, hit)
+            if hit:
+                assert stop in hit[0].text and hit[0].level == "CAUTION"
+        finally:
+            fuel.load_fuel.cache_clear()
+
+
+def test_share_text_is_short_and_has_the_essentials(db, ac, mins):
+    from flightplanner.export import share_text
+    plans = candidate_plans(db, db.get("KLEX"), db.get("KSPG"), ac, mins)
+    ctx = _ctx(db, ac, mins, plans)
+    day = ctx.local(ctx.now).date() + timedelta(days=1)
+    from zoneinfo import ZoneInfo
+    dep = datetime(day.year, day.month, day.day, 9, tzinfo=ZoneInfo(ctx.tz)).astimezone(timezone.utc)
+    r = evaluate_plan(ctx, plans[0], dep)
+    txt = share_text(r, ctx.tz, "N123AB")
+    assert txt.startswith("✈️ N123AB KLEX →") and "leave 9:00 AM" in txt
+    assert "official briefing" in txt and len(txt) < 900

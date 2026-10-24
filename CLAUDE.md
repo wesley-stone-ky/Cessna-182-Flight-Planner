@@ -64,6 +64,9 @@ legal weather briefing.
   attendance), built by `scripts/build_fuel_data.py` and refreshed weekly by
   `.github/workflows/refresh-fuel.yml`. Stops the FAA says lack 100LL are never used; unknown falls back to
   `airports.KNOWN_FUEL`. Prices are not scraped (no free official source) — the UI links to AirNav.
+  `self_serve` comes from APT_RMK remarks. `_fuel_stop_hours` (planner.py) cautions when you'd land at a
+  fuel stop outside attended hours with no self-serve; unattended/no-self-serve stops cost more in
+  `_stop_cost`. `export.share_text` is the copilot text (Streamlit + web trip page "sms:" link).
 
 ## Rules
 - Safety first: when unsure, make a check MORE conservative and say why in the finding text.

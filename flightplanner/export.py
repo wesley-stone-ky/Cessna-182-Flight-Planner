@@ -92,3 +92,26 @@ def text_brief(ctx: Context, r: PlanResult) -> str:
     lines += ["", "SCREENING ONLY. Get an official briefing (1800wxbrief.com, ForeFlight or Garmin Pilot),",
               "check NOTAMs/TFRs and fuel availability, and confirm performance with your POH before flight."]
     return "\n".join(lines)
+
+
+def share_text(r: PlanResult, tz: str = "America/New_York", tail: str = "") -> str:
+    """Short trip summary to text a copilot (fits in one or two iMessage bubbles)."""
+    from zoneinfo import ZoneInfo
+    z = ZoneInfo(tz)
+    loc = lambda dt: dt.astimezone(z)  # noqa: E731
+    head = f"✈️ {tail + ' ' if tail else ''}{' → '.join(a.ident for a in r.plan.airports)}"
+    lines = [
+        head,
+        f"{loc(r.dep_time):%a %b %-d}: leave {loc(r.dep_time):%-I:%M %p}, land {loc(r.arr_time):%-I:%M %p %Z}",
+        f"{'Nonstop' if not r.plan.stops else 'Stop: ' + ', '.join(a.ident for a in r.plan.stops)}"
+        f" · {r.flight_hours:.1f} h flying · {r.plan.total_nm:.0f} nm",
+        f"Screen: {r.status}",
+    ]
+    for lr in r.legs:
+        lines.append(f"{lr.leg.dep.ident}-{lr.leg.arr.ident}: {lr.alt_ft:,.0f} ft, {lr.minutes:.0f} min, "
+                     f"land with {lr.fuel_at_landing_gal:.0f} gal")
+    reasons = r.top_reasons(3)
+    if reasons:
+        lines.append("Watch: " + " | ".join(x.split(": ", 1)[-1] for x in reasons))
+    lines.append("Screening only. Get an official briefing before we go.")
+    return "\n".join(lines)
