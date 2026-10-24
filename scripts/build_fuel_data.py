@@ -81,6 +81,16 @@ def build_rows(zip_bytes: bytes) -> list[dict]:
             sched = " ".join(x for x in (r.get("MONTH", ""), r.get("DAY", ""), r.get("HOUR", "")) if x).strip()
             if sched:
                 att.setdefault(r["SITE_NO"].strip(), []).append(sched)
+    # Self-serve pumps are only mentioned in free-text remarks ("100LL SELF SVC 24 HRS").
+    self_serve: set[str] = set()
+    rmk = _open_csv(zf, "APT_RMK.csv")
+    if rmk is not None:
+        for r in rmk:
+            text = (r.get("REMARK") or "").upper()
+            col = (r.get("REF_COL_NAME") or "").upper()
+            if ("SELF" in text and ("SVC" in text or "SERV" in text or "SVCE" in text)
+                    and ("FUEL" in text or "100LL" in text or "FUEL" in col)):
+                self_serve.add((r.get("SITE_NO") or "").strip())
     rows = []
     for r in base:
         if (r.get("SITE_TYPE_CODE") or "").strip() != "A" or (r.get("FACILITY_USE_CODE") or "").strip() != "PU":
@@ -93,6 +103,7 @@ def build_rows(zip_bytes: bytes) -> list[dict]:
             "faa_id": arpt,
             "fuel_types": fuel,
             "attendance": "; ".join(att.get((r.get("SITE_NO") or "").strip(), []))[:120],
+            "self_serve": "1" if (r.get("SITE_NO") or "").strip() in self_serve else "",
             "eff_date": (r.get("EFF_DATE") or "").strip(),
         })
     rows.sort(key=lambda x: x["ident"])
@@ -102,7 +113,7 @@ def build_rows(zip_bytes: bytes) -> list[dict]:
 def write(rows: list[dict], path: Path = OUT) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["ident", "faa_id", "fuel_types", "attendance", "eff_date"])
+        w = csv.DictWriter(f, fieldnames=["ident", "faa_id", "fuel_types", "attendance", "self_serve", "eff_date"])
         w.writeheader()
         w.writerows(rows)
 

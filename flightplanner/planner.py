@@ -225,6 +225,10 @@ def _stop_cost(ap: Airport, mins: Minimums) -> float:
         cost += 10
     if ap.type == "large_airport":
         cost += 40  # Class B/C hassle, ramp fees
+    from .fuel import fuel_info, is_unattended
+    info = fuel_info(ap.ident)
+    if info is not None and is_unattended(info.attendance) and not info.self_serve:
+        cost += 30  # no one there and no self-serve listed: fuel isn't a sure thing
     return cost
 
 
@@ -747,6 +751,8 @@ def evaluate_plan(ctx: Context, plan: RoutePlan, dep_time: datetime) -> PlanResu
         lr = evaluate_leg(ctx, leg, i, t, ctx.ac.usable_gal)
         legs.append(lr)
         findings += lr.findings
+        if i < len(plan.legs) - 1:
+            findings += _fuel_stop_hours(ctx, leg.arr, lr.arr_time, i)
         t = lr.arr_time + timedelta(minutes=ctx.mins.fuel_stop_ground_minutes)
     if dep_time < ctx.now:
         findings.append(Finding(NOGO, 0, "", "Departure time is in the past", "past"))
@@ -871,3 +877,22 @@ def _night_checks(ctx: "Context", leg: "Leg", li: int, dep_time: datetime, arr_t
                                     f"{leg.dep.ident}-{leg.arr.ident}: few lit landing options if the engine "
                                     "quits. Consider a higher altitude, a route around the ridges, or crossing "
                                     "them in daylight.", "night-terrain"))
+
+
+
+def _fuel_stop_hours(ctx: "Context", ap, arr_time: datetime, li: int) -> list:
+    """CAUTION when you'd reach a fuel stop outside its attended hours and no self-serve is listed."""
+    from .fuel import attended_at, fuel_info
+    info = fuel_info(ap.ident)
+    if info is None or info.self_serve:
+        return []
+    tz = getattr(ap, "tz", None) or ctx.tz
+    local = arr_time.astimezone(ZoneInfo(tz))
+    rise, sset = sun_times(ap.lat, ap.lon, arr_time, tz)
+    open_now = attended_at(info.attendance, local, rise.astimezone(ZoneInfo(tz)), sset.astimezone(ZoneInfo(tz)))
+    if open_now is False:
+        sched = info.attendance or "unattended"
+        return [Finding(CAUTION, li, ap.ident,
+                        f"Fuel stop {ap.ident}: you'd land at {local:%-I:%M %p}, but the FAA lists it as attended "
+                        f"{sched} and no self-serve pump is listed. Call ahead or pick another stop.", "fuel-hours")]
+    return []

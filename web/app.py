@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 from flightplanner.aircraft import catalog
 from flightplanner.airports import AirportDB
 from flightplanner.config import minimum_presets
+from flightplanner.export import share_text
 from flightplanner.mail import MailNotConfigured, message, send_messages
 from flightplanner.registry import lookup as registry_lookup
 from flightplanner.weather import fetch_forecast, snap
@@ -410,7 +411,8 @@ def create_app(db_path: str | None = None, forecast=None, send_mail=None, base_u
         if to[0].ident == dep.ident:
             return trip_page(request, u, 400, error="That's your home airport. Pick where you're going.", **form)
         res = trips.plan(dep, to[0], ac, user_minimums(u), form["start"], form["end"], earliest, latest)
-        return trip_page(request, u, result=res, zone=ZoneInfo(res.tz), **{**form, "dest": to[0].ident})
+        return trip_page(request, u, result=res, zone=ZoneInfo(res.tz),
+                         share=lambda b: share_text(b, res.tz), **{**form, "dest": to[0].ident})
 
     @app.get("/trip/export")
     def trip_export(request: Request, route: str = ""):
